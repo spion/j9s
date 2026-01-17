@@ -156,8 +156,6 @@ impl App {
         ViewAction::Quit => {
           if self.view_stack.len() > 1 {
             self.view_stack.pop();
-          } else {
-            self.should_quit = true;
           }
         }
         ViewAction::None => {}
