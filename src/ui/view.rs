@@ -40,7 +40,7 @@ pub trait View {
   fn handle_key(&mut self, key: KeyEvent) -> ViewAction;
 
   /// Render the view to the frame
-  fn render(&self, frame: &mut Frame, area: Rect);
+  fn render(&mut self, frame: &mut Frame, area: Rect);
 
   /// Get the breadcrumb label for this view
   fn breadcrumb_label(&self) -> String;
@@ -68,11 +68,5 @@ pub trait View {
       Shortcut::new("/", "filter"),
       Shortcut::new("q", "back"),
     ]
-  }
-
-  /// Get the number of header lines needed for this view
-  /// Override this to request more header space for shortcuts
-  fn header_lines(&self) -> u16 {
-    1
   }
 }

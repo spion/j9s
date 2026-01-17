@@ -1,6 +1,7 @@
 use crate::event::JiraEvent;
 use crate::jira::types::IssueSummary;
 use crate::ui::components::{SearchInput, SearchResult};
+use crate::ui::renderfns::{status_color, truncate};
 use crate::ui::view::{View, ViewAction};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
@@ -10,9 +11,9 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 #[derive(Debug)]
 pub struct IssueListView {
   pub issues: Vec<IssueSummary>,
-  pub selected: usize,
   pub project: String,
   pub loading: bool,
+  list_state: ListState,
   search: SearchInput,
 }
 
@@ -20,14 +21,14 @@ impl IssueListView {
   pub fn new(project: String) -> Self {
     Self {
       issues: Vec::new(),
-      selected: 0,
       project,
       loading: true,
+      list_state: ListState::default(),
       search: SearchInput::new(),
     }
   }
 
-  fn render_list(&self, frame: &mut Frame, area: Rect) {
+  fn render_list(&mut self, frame: &mut Frame, area: Rect) {
     let title = if self.loading {
       format!(" Issues [{}] (loading...) ", self.project)
     } else {
@@ -57,11 +58,7 @@ impl IssueListView {
       .issues
       .iter()
       .map(|issue| {
-        let status_color = match issue.status.as_str() {
-          "Done" | "Closed" | "Resolved" => Color::Green,
-          "In Progress" | "In Review" => Color::Yellow,
-          _ => Color::White,
-        };
+        let color = status_color(&issue.status);
 
         let line = Line::from(vec![
           Span::styled(
@@ -71,7 +68,7 @@ impl IssueListView {
           Span::raw(" "),
           Span::styled(
             format!("{:<12}", truncate(&issue.status, 12)),
-            Style::default().fg(status_color),
+            Style::default().fg(color),
           ),
           Span::raw(" "),
           Span::raw(truncate(&issue.summary, 60)),
@@ -89,10 +86,7 @@ impl IssueListView {
       )
       .highlight_symbol("> ");
 
-    let mut state = ListState::default();
-    state.select(Some(self.selected));
-
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, area, &mut self.list_state);
   }
 }
 
@@ -112,22 +106,18 @@ impl View for IssueListView {
     // Normal mode key handling
     match key.code {
       KeyCode::Char('j') | KeyCode::Down => {
-        let len = self.issues.len();
-        if len > 0 {
-          self.selected = (self.selected + 1) % len;
-        }
+        self.list_state.select_next();
       }
       KeyCode::Char('k') | KeyCode::Up => {
-        let len = self.issues.len();
-        if len > 0 {
-          self.selected = self.selected.checked_sub(1).unwrap_or(len - 1);
-        }
+        self.list_state.select_previous();
       }
       KeyCode::Enter => {
-        if let Some(issue) = self.issues.get(self.selected) {
-          return ViewAction::LoadIssue {
-            key: issue.key.clone(),
-          };
+        if let Some(idx) = self.list_state.selected() {
+          if let Some(issue) = self.issues.get(idx) {
+            return ViewAction::LoadIssue {
+              key: issue.key.clone(),
+            };
+          }
         }
       }
       KeyCode::Char('q') | KeyCode::Esc => return ViewAction::Quit,
@@ -136,7 +126,7 @@ impl View for IssueListView {
     ViewAction::None
   }
 
-  fn render(&self, frame: &mut Frame, area: Rect) {
+  fn render(&mut self, frame: &mut Frame, area: Rect) {
     self.render_list(frame, area);
     // Let search component render its overlay
     self.search.render_overlay(frame, area);
@@ -167,13 +157,5 @@ impl View for IssueListView {
       }
       _ => false,
     }
-  }
-}
-
-fn truncate(s: &str, max_len: usize) -> String {
-  if s.len() <= max_len {
-    s.to_string()
-  } else {
-    format!("{}...", &s[..max_len.saturating_sub(3)])
   }
 }

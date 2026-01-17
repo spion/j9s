@@ -10,8 +10,8 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 #[derive(Debug)]
 pub struct BoardListView {
   pub boards: Vec<Board>,
-  pub selected: usize,
   pub loading: bool,
+  list_state: ListState,
   search: SearchInput,
 }
 
@@ -19,13 +19,13 @@ impl BoardListView {
   pub fn new() -> Self {
     Self {
       boards: Vec::new(),
-      selected: 0,
       loading: true,
+      list_state: ListState::default(),
       search: SearchInput::new(),
     }
   }
 
-  fn render_list(&self, frame: &mut Frame, area: Rect) {
+  fn render_list(&mut self, frame: &mut Frame, area: Rect) {
     let title = if self.loading {
       " Boards (loading...) ".to_string()
     } else {
@@ -73,10 +73,7 @@ impl BoardListView {
       )
       .highlight_symbol("> ");
 
-    let mut state = ListState::default();
-    state.select(Some(self.selected));
-
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, area, &mut self.list_state);
   }
 }
 
@@ -102,23 +99,19 @@ impl View for BoardListView {
     // Normal mode key handling
     match key.code {
       KeyCode::Char('j') | KeyCode::Down => {
-        let len = self.boards.len();
-        if len > 0 {
-          self.selected = (self.selected + 1) % len;
-        }
+        self.list_state.select_next();
       }
       KeyCode::Char('k') | KeyCode::Up => {
-        let len = self.boards.len();
-        if len > 0 {
-          self.selected = self.selected.checked_sub(1).unwrap_or(len - 1);
-        }
+        self.list_state.select_previous();
       }
       KeyCode::Enter => {
-        if let Some(board) = self.boards.get(self.selected) {
-          return ViewAction::LoadBoard {
-            id: board.id,
-            name: board.name.clone(),
-          };
+        if let Some(idx) = self.list_state.selected() {
+          if let Some(board) = self.boards.get(idx) {
+            return ViewAction::LoadBoard {
+              id: board.id,
+              name: board.name.clone(),
+            };
+          }
         }
       }
       KeyCode::Char('q') | KeyCode::Esc => return ViewAction::Quit,
@@ -127,7 +120,7 @@ impl View for BoardListView {
     ViewAction::None
   }
 
-  fn render(&self, frame: &mut Frame, area: Rect) {
+  fn render(&mut self, frame: &mut Frame, area: Rect) {
     self.render_list(frame, area);
     // Let search component render its overlay
     self.search.render_overlay(frame, area);

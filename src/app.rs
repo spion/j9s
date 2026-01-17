@@ -183,7 +183,9 @@ impl App {
 
   fn load_board(&mut self, id: u64, name: &str) {
     // Push BoardView immediately, it will receive data when ready
-    self.view_stack.push(Box::new(BoardView::new(id, name.to_string())));
+    self
+      .view_stack
+      .push(Box::new(BoardView::new(id, name.to_string())));
 
     let jira = self.jira.clone();
     let tx = self.event_tx.clone();
@@ -297,6 +299,13 @@ impl App {
     self.view_stack.last().map(|v| v.as_ref())
   }
 
+  pub fn current_view_mut(&mut self) -> Option<&mut dyn View> {
+    match self.view_stack.last_mut() {
+      Some(v) => Some(&mut **v),
+      None => None,
+    }
+  }
+
   pub fn jira_url(&self) -> &str {
     &self.config.jira.url
   }
@@ -336,10 +345,5 @@ impl App {
           Shortcut::new("q", "back"),
         ]
       })
-  }
-
-  /// Get header line count from current view
-  pub fn header_lines(&self) -> u16 {
-    self.view_stack.last().map(|v| v.header_lines()).unwrap_or(1)
   }
 }

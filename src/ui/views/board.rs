@@ -1,6 +1,7 @@
 use crate::event::JiraEvent;
 use crate::jira::types::{BoardColumn, IssueSummary, QuickFilter};
 use crate::ui::components::{SearchInput, SearchResult};
+use crate::ui::renderfns::{status_color, truncate};
 use crate::ui::view::{Shortcut, View, ViewAction};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
@@ -18,7 +19,8 @@ pub struct BoardView {
   quick_filters: Vec<QuickFilter>,
 
   // UI state
-  selected: usize,
+  list_state: ListState,    // Selection for list mode
+  swimlane_selected: usize, // Selection within column for swimlane mode
   selected_column: usize,
   selected_filter: Option<usize>, // Index into quick_filters, None = "All"
   filter_bar_active: bool,        // Whether filter tabs are shown/navigable
@@ -37,7 +39,8 @@ impl BoardView {
       issues: Vec::new(),
       columns: Vec::new(),
       quick_filters: Vec::new(),
-      selected: 0,
+      list_state: ListState::default(),
+      swimlane_selected: 0,
       selected_column: 0,
       selected_filter: None,
       filter_bar_active: false,
@@ -62,7 +65,7 @@ impl BoardView {
   }
 
   /// Render list mode
-  fn render_list(&self, frame: &mut Frame, area: Rect) {
+  fn render_list(&mut self, frame: &mut Frame, area: Rect) {
     let title = if self.loading {
       format!(" {} (loading...) ", self.board_name)
     } else {
@@ -87,11 +90,7 @@ impl BoardView {
     let items: Vec<ListItem> = filtered
       .iter()
       .map(|issue| {
-        let status_color = match issue.status.as_str() {
-          "Done" | "Closed" | "Resolved" => Color::Green,
-          "In Progress" | "In Review" => Color::Yellow,
-          _ => Color::White,
-        };
+        let color = status_color(&issue.status);
 
         let line = Line::from(vec![
           Span::styled(
@@ -101,7 +100,7 @@ impl BoardView {
           Span::raw(" "),
           Span::styled(
             format!("{:<12}", truncate(&issue.status, 12)),
-            Style::default().fg(status_color),
+            Style::default().fg(color),
           ),
           Span::raw(" "),
           Span::raw(truncate(&issue.summary, 60)),
@@ -119,10 +118,7 @@ impl BoardView {
       )
       .highlight_symbol("> ");
 
-    let mut state = ListState::default();
-    state.select(Some(self.selected));
-
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, area, &mut self.list_state);
   }
 
   /// Render swimlane (kanban) mode
@@ -177,12 +173,10 @@ impl BoardView {
       let items: Vec<ListItem> = issues
         .iter()
         .map(|issue| {
-          let line = Line::from(vec![
-            Span::styled(
-              truncate(&issue.key, col_width.saturating_sub(4) as usize),
-              Style::default().fg(Color::Cyan),
-            ),
-          ]);
+          let line = Line::from(vec![Span::styled(
+            truncate(&issue.key, col_width.saturating_sub(4) as usize),
+            Style::default().fg(Color::Cyan),
+          )]);
           ListItem::new(line)
         })
         .collect();
@@ -198,7 +192,7 @@ impl BoardView {
 
       if is_selected_column {
         let mut state = ListState::default();
-        state.select(Some(self.selected));
+        state.select(Some(self.swimlane_selected));
         frame.render_stateful_widget(list, col_area, &mut state);
       } else {
         frame.render_widget(list, col_area);
@@ -247,26 +241,24 @@ impl BoardView {
     if self.swimlane_mode {
       if let Some(column) = self.columns.get(self.selected_column) {
         let issues = self.issues_for_column(column);
-        issues.get(self.selected).copied()
+        issues.get(self.swimlane_selected).copied()
       } else {
         None
       }
     } else {
-      self.filtered_issues().get(self.selected).copied()
+      self
+        .list_state
+        .selected()
+        .and_then(|idx| self.filtered_issues().get(idx).copied())
     }
   }
 
-  /// Navigate in list mode
+  /// Navigate in list mode (uses ListState)
   fn navigate_list(&mut self, direction: i32) {
-    let len = self.filtered_issues().len();
-    if len == 0 {
-      return;
-    }
-
     if direction > 0 {
-      self.selected = (self.selected + 1) % len;
+      self.list_state.select_next();
     } else {
-      self.selected = self.selected.checked_sub(1).unwrap_or(len - 1);
+      self.list_state.select_previous();
     }
   }
 
@@ -282,10 +274,13 @@ impl BoardView {
       if direction > 0 {
         self.selected_column = (self.selected_column + 1) % num_columns;
       } else {
-        self.selected_column = self.selected_column.checked_sub(1).unwrap_or(num_columns - 1);
+        self.selected_column = self
+          .selected_column
+          .checked_sub(1)
+          .unwrap_or(num_columns - 1);
       }
       // Reset selection within new column
-      self.selected = 0;
+      self.swimlane_selected = 0;
     } else {
       // Move within column
       if let Some(column) = self.columns.get(self.selected_column) {
@@ -295,9 +290,9 @@ impl BoardView {
         }
 
         if direction > 0 {
-          self.selected = (self.selected + 1) % len;
+          self.swimlane_selected = (self.swimlane_selected + 1) % len;
         } else {
-          self.selected = self.selected.checked_sub(1).unwrap_or(len - 1);
+          self.swimlane_selected = self.swimlane_selected.checked_sub(1).unwrap_or(len - 1);
         }
       }
     }
@@ -330,7 +325,7 @@ impl BoardView {
     };
 
     // Reset list selection when changing filter
-    self.selected = 0;
+    self.list_state.select(Some(0));
   }
 }
 
@@ -399,7 +394,8 @@ impl View for BoardView {
       // Toggle swimlane mode
       KeyCode::Char('s') => {
         self.swimlane_mode = !self.swimlane_mode;
-        self.selected = 0;
+        self.list_state.select(Some(0));
+        self.swimlane_selected = 0;
         self.selected_column = 0;
       }
 
@@ -420,7 +416,7 @@ impl View for BoardView {
     ViewAction::None
   }
 
-  fn render(&self, frame: &mut Frame, area: Rect) {
+  fn render(&mut self, frame: &mut Frame, area: Rect) {
     // Split area for filters (if active) and main content
     let show_filters = self.filter_bar_active && !self.quick_filters.is_empty();
     let (filter_area, content_area) = if show_filters {
@@ -509,24 +505,5 @@ impl View for BoardView {
     }
 
     shortcuts
-  }
-
-  fn header_lines(&self) -> u16 {
-    // Use 2 lines when we have view-specific shortcuts
-    let has_filters = !self.quick_filters.is_empty();
-    let has_columns = !self.columns.is_empty();
-    if has_filters || has_columns {
-      2
-    } else {
-      1
-    }
-  }
-}
-
-fn truncate(s: &str, max_len: usize) -> String {
-  if s.len() <= max_len {
-    s.to_string()
-  } else {
-    format!("{}...", &s[..max_len.saturating_sub(3)])
   }
 }

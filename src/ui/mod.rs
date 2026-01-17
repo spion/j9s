@@ -8,14 +8,14 @@ use ratatui::prelude::*;
 use renderfns::{draw_footer, draw_header};
 
 /// Main draw function
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
   // Header is always 2 lines
   let chunks = Layout::default()
     .direction(Direction::Vertical)
     .constraints([
-      Constraint::Length(2),  // Header (always 2 lines)
-      Constraint::Min(1),     // Main content
-      Constraint::Length(1),  // Footer (breadcrumb)
+      Constraint::Length(2), // Header (always 2 lines)
+      Constraint::Min(1),    // Main content
+      Constraint::Length(1), // Footer (breadcrumb)
     ])
     .split(frame.area());
 
@@ -30,7 +30,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
   );
 
   // Draw current view (view handles its own overlays like search)
-  if let Some(view) = app.current_view() {
+  if let Some(view) = app.current_view_mut() {
     view.render(frame, chunks[1]);
   }
 

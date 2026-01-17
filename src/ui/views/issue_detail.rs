@@ -89,7 +89,7 @@ impl View for IssueDetailView {
     }
   }
 
-  fn render(&self, frame: &mut Frame, area: Rect) {
+  fn render(&mut self, frame: &mut Frame, area: Rect) {
     self.render_detail(frame, area);
   }
 
