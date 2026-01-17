@@ -1,0 +1,23 @@
+# j9s configuration
+# Copy this file to ~/.config/j9s/config.yaml
+
+jira:
+  # Your Jira instance URL
+  # For Jira Cloud: https://your-domain.atlassian.net
+  # For Jira Server/DC: https://jira.your-company.com
+  url: "https://your-domain.atlassian.net"
+
+  # Your email address (for Jira Cloud) or username (for Server/DC)
+  email: "you@example.com"
+
+# Default project key to show on startup (optional)
+# Can be overridden with -p/--project flag
+default_project: "PROJ"
+
+# Note: API token should be set via environment variable:
+#   export J9S_JIRA_TOKEN="your-api-token"
+#
+# For Jira Cloud, generate a token at:
+#   https://id.atlassian.com/manage-profile/security/api-tokens
+#
+# For Jira Server/DC, use a Personal Access Token or your password
