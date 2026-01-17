@@ -1,3 +1,4 @@
+use crate::commands::{self, Command};
 use crate::config::Config;
 use crate::event::{Event, EventHandler, JiraEvent};
 use crate::jira::client::JiraClient;
@@ -70,6 +71,9 @@ pub struct App {
   /// Search filter input (after pressing /)
   search_filter: String,
 
+  /// Selected autocomplete suggestion index
+  selected_suggestion: usize,
+
   /// Application configuration
   config: Config,
 
@@ -100,6 +104,7 @@ impl App {
       mode: Mode::Normal,
       command_input: String::new(),
       search_filter: String::new(),
+      selected_suggestion: 0,
       config,
       jira,
       event_tx: tx,
@@ -224,16 +229,38 @@ impl App {
       KeyCode::Esc => {
         self.mode = Mode::Normal;
         self.command_input.clear();
+        self.selected_suggestion = 0;
       }
       KeyCode::Enter => {
         self.execute_command();
         self.mode = Mode::Normal;
+        self.selected_suggestion = 0;
+      }
+      KeyCode::Tab | KeyCode::Down => {
+        // Navigate autocomplete suggestions
+        let suggestions = commands::get_suggestions(&self.command_input);
+        if !suggestions.is_empty() {
+          self.selected_suggestion = (self.selected_suggestion + 1) % suggestions.len();
+        }
+      }
+      KeyCode::BackTab | KeyCode::Up => {
+        // Navigate autocomplete suggestions backwards
+        let suggestions = commands::get_suggestions(&self.command_input);
+        if !suggestions.is_empty() {
+          self.selected_suggestion = if self.selected_suggestion == 0 {
+            suggestions.len() - 1
+          } else {
+            self.selected_suggestion - 1
+          };
+        }
       }
       KeyCode::Backspace => {
         self.command_input.pop();
+        self.selected_suggestion = 0; // Reset selection on input change
       }
       KeyCode::Char(c) => {
         self.command_input.push(c);
+        self.selected_suggestion = 0; // Reset selection on input change
       }
       _ => {}
     }
@@ -260,9 +287,16 @@ impl App {
   }
 
   fn execute_command(&mut self) {
-    let cmd = self.command_input.trim().to_lowercase();
+    // Get the command to execute - either from selected suggestion or direct input
+    let suggestions = commands::get_suggestions(&self.command_input);
+    let cmd = if !suggestions.is_empty() && self.selected_suggestion < suggestions.len() {
+      suggestions[self.selected_suggestion].name.to_string()
+    } else {
+      self.command_input.trim().to_lowercase()
+    };
+
     match cmd.as_str() {
-      "issues" | "i" => {
+      "issues" => {
         let project = self.config.default_project.clone().unwrap_or_default();
         self.view_stack[0] = ViewState::IssueList {
           issues: Vec::new(),
@@ -273,7 +307,7 @@ impl App {
         self.view_stack.truncate(1);
         self.load_initial_data();
       }
-      "boards" | "b" => {
+      "boards" => {
         self.view_stack[0] = ViewState::BoardList {
           boards: Vec::new(),
           selected: 0,
@@ -282,7 +316,13 @@ impl App {
         self.view_stack.truncate(1);
         self.load_boards();
       }
-      "quit" | "q" => {
+      "epics" => {
+        // TODO: Implement epics view
+      }
+      "searches" => {
+        // TODO: Implement saved searches view
+      }
+      "quit" => {
         self.should_quit = true;
       }
       _ => {
@@ -428,5 +468,52 @@ impl App {
 
   pub fn search_filter(&self) -> &str {
     &self.search_filter
+  }
+
+  pub fn jira_url(&self) -> &str {
+    &self.config.jira.url
+  }
+
+  pub fn current_project(&self) -> &str {
+    // Get project from current view or config default
+    if let Some(view) = self.view_stack.first() {
+      if let ViewState::IssueList { project, .. } = view {
+        return project;
+      }
+    }
+    self.config.default_project.as_deref().unwrap_or("")
+  }
+
+  pub fn view_breadcrumb(&self) -> Vec<String> {
+    self
+      .view_stack
+      .iter()
+      .map(|v| v.breadcrumb_label())
+      .collect()
+  }
+
+  pub fn autocomplete_suggestions(&self) -> Vec<&'static Command> {
+    commands::get_suggestions(&self.command_input)
+  }
+
+  pub fn selected_suggestion(&self) -> usize {
+    self.selected_suggestion
+  }
+}
+
+impl ViewState {
+  /// Get the label for this view in the breadcrumb
+  fn breadcrumb_label(&self) -> String {
+    match self {
+      ViewState::IssueList { project, .. } => {
+        if project.is_empty() {
+          "Issues".to_string()
+        } else {
+          format!("Issues [{}]", project)
+        }
+      }
+      ViewState::BoardList { .. } => "Boards".to_string(),
+      ViewState::IssueDetail { issue, .. } => issue.key.clone(),
+    }
   }
 }
