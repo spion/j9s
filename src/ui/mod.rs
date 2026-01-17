@@ -1,9 +1,11 @@
-mod components;
-mod views;
+pub mod components;
+pub mod renderfns;
+pub mod view;
+pub mod views;
 
-use crate::app::{App, Mode, ViewState};
-use components::{draw_command_overlay, draw_footer, draw_header};
+use crate::app::App;
 use ratatui::prelude::*;
+use renderfns::{draw_footer, draw_header};
 
 /// Main draw function
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -19,55 +21,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
   // Draw header
   draw_header(frame, chunks[0], app.jira_url(), app.current_project());
 
-  // Draw current view
+  // Draw current view (view handles its own overlays like search)
   if let Some(view) = app.current_view() {
-    match view {
-      ViewState::IssueList {
-        issues,
-        selected,
-        project,
-        loading,
-      } => {
-        views::issues::draw_issue_list(frame, chunks[1], issues, *selected, project, *loading);
-      }
-      ViewState::BoardList {
-        boards,
-        selected,
-        loading,
-      } => {
-        views::boards::draw_board_list(frame, chunks[1], boards, *selected, *loading);
-      }
-      ViewState::IssueDetail { issue, loading } => {
-        views::issue_detail::draw_issue_detail(frame, chunks[1], issue, *loading);
-      }
-    }
+    view.render(frame, chunks[1]);
   }
 
-  // Draw command/search overlay if in command or search mode
-  match app.mode() {
-    Mode::Command => {
-      let suggestions = app.autocomplete_suggestions();
-      draw_command_overlay(
-        frame,
-        chunks[1],
-        ":",
-        app.command_input(),
-        &suggestions,
-        app.selected_suggestion(),
-      );
-    }
-    Mode::Search => {
-      draw_command_overlay(
-        frame,
-        chunks[1],
-        "/",
-        app.search_filter(),
-        &[], // No autocomplete for search
-        0,
-      );
-    }
-    Mode::Normal => {}
-  }
+  // Let command component render its overlay if active
+  app.render_command_overlay(frame, chunks[1]);
 
   // Draw footer breadcrumb
   let breadcrumb = app.view_breadcrumb();

@@ -1,7 +1,7 @@
-pub mod command_overlay;
-pub mod footer;
-pub mod header;
+mod command_input;
+mod input;
+mod search_input;
 
-pub use command_overlay::draw_command_overlay;
-pub use footer::draw_footer;
-pub use header::draw_header;
+pub use command_input::{CommandInput, CommandResult};
+pub use input::{InputResult, TextInput};
+pub use search_input::{SearchInput, SearchResult};
