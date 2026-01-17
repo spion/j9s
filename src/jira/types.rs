@@ -41,3 +41,24 @@ pub struct Epic {
   pub summary: String,
   pub status: String,
 }
+
+/// Board column configuration
+#[derive(Debug, Clone)]
+pub struct BoardColumn {
+  pub name: String,
+  pub statuses: Vec<String>, // Status names that map to this column
+}
+
+/// Board configuration with columns
+#[derive(Debug, Clone)]
+pub struct BoardConfiguration {
+  pub columns: Vec<BoardColumn>,
+}
+
+/// Quick filter for a board
+#[derive(Debug, Clone)]
+pub struct QuickFilter {
+  pub id: u64,
+  pub name: String,
+  pub jql: String,
+}

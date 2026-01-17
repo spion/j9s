@@ -1,5 +1,7 @@
 use crate::config::Config;
-use crate::jira::types::{Board, Issue, IssueSummary};
+use crate::jira::types::{
+  Board, BoardColumn, BoardConfiguration, Issue, IssueSummary, QuickFilter,
+};
 use color_eyre::{eyre::eyre, Result};
 use serde_json::Value;
 
@@ -160,6 +162,141 @@ impl JiraClient {
       .collect();
 
     Ok(boards)
+  }
+
+  /// Get issues for a specific board
+  pub async fn get_board_issues(&self, board_id: u64) -> Result<Vec<IssueSummary>> {
+    let endpoint = format!("/board/{}/issue", board_id);
+    let response: Value = self
+      .client
+      .get("agile", &endpoint)
+      .await
+      .map_err(|e| eyre!("Failed to get board issues: {}", e))?;
+
+    let issues = response
+      .get("issues")
+      .and_then(|v| v.as_array())
+      .map(|arr| {
+        arr
+          .iter()
+          .filter_map(|issue| {
+            let key = issue.get("key")?.as_str()?.to_string();
+            let fields = issue.get("fields")?;
+
+            Some(IssueSummary {
+              key,
+              summary: fields
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+              status: fields
+                .get("status")
+                .and_then(|v| v.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown")
+                .to_string(),
+              issue_type: fields
+                .get("issuetype")
+                .and_then(|v| v.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+              assignee: fields
+                .get("assignee")
+                .and_then(|v| v.get("displayName"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+              priority: fields
+                .get("priority")
+                .and_then(|v| v.get("name"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            })
+          })
+          .collect()
+      })
+      .unwrap_or_default();
+
+    Ok(issues)
+  }
+
+  /// Get board configuration (columns)
+  pub async fn get_board_configuration(&self, board_id: u64) -> Result<BoardConfiguration> {
+    let endpoint = format!("/board/{}/configuration", board_id);
+    let response: Value = self
+      .client
+      .get("agile", &endpoint)
+      .await
+      .map_err(|e| eyre!("Failed to get board configuration: {}", e))?;
+
+    let columns = response
+      .get("columnConfig")
+      .and_then(|v| v.get("columns"))
+      .and_then(|v| v.as_array())
+      .map(|arr| {
+        arr
+          .iter()
+          .filter_map(|col| {
+            let name = col.get("name")?.as_str()?.to_string();
+            let statuses = col
+              .get("statuses")
+              .and_then(|v| v.as_array())
+              .map(|statuses| {
+                statuses
+                  .iter()
+                  .filter_map(|s| {
+                    // Try both "name" (Cloud) and direct string (Server)
+                    s.get("self")
+                      .and_then(|_| s.get("name"))
+                      .and_then(|v| v.as_str())
+                      .or_else(|| s.as_str())
+                      .map(|s| s.to_string())
+                  })
+                  .collect()
+              })
+              .unwrap_or_default();
+
+            Some(BoardColumn { name, statuses })
+          })
+          .collect()
+      })
+      .unwrap_or_default();
+
+    Ok(BoardConfiguration { columns })
+  }
+
+  /// Get quick filters for a board
+  pub async fn get_board_quick_filters(&self, board_id: u64) -> Result<Vec<QuickFilter>> {
+    let endpoint = format!("/board/{}/quickfilter", board_id);
+    let response: Value = self
+      .client
+      .get("agile", &endpoint)
+      .await
+      .map_err(|e| eyre!("Failed to get board quick filters: {}", e))?;
+
+    let filters = response
+      .get("values")
+      .and_then(|v| v.as_array())
+      .map(|arr| {
+        arr
+          .iter()
+          .filter_map(|f| {
+            let id = f.get("id")?.as_u64()?;
+            let name = f.get("name")?.as_str()?.to_string();
+            let jql = f
+              .get("jql")
+              .and_then(|v| v.as_str())
+              .unwrap_or("")
+              .to_string();
+
+            Some(QuickFilter { id, name, jql })
+          })
+          .collect()
+      })
+      .unwrap_or_default();
+
+    Ok(filters)
   }
 }
 

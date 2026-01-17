@@ -3,8 +3,8 @@ use crate::event::{Event, EventHandler, JiraEvent};
 use crate::jira::client::JiraClient;
 use crate::ui;
 use crate::ui::components::{CommandInput, CommandResult};
-use crate::ui::view::{View, ViewAction};
-use crate::ui::views::{BoardListView, IssueDetailView, IssueListView};
+use crate::ui::view::{Shortcut, View, ViewAction};
+use crate::ui::views::{BoardListView, BoardView, IssueDetailView, IssueListView};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{
@@ -147,7 +147,7 @@ impl App {
     if let Some(view) = self.view_stack.last_mut() {
       match view.handle_key(key) {
         ViewAction::LoadIssue { key } => self.load_issue(&key),
-        ViewAction::LoadBoard { id } => self.load_board(id),
+        ViewAction::LoadBoard { id, name } => self.load_board(id, &name),
         ViewAction::Pop => {
           if self.view_stack.len() > 1 {
             self.view_stack.pop();
@@ -181,8 +181,39 @@ impl App {
     });
   }
 
-  fn load_board(&self, _id: u64) {
-    // TODO: Load board details
+  fn load_board(&mut self, id: u64, name: &str) {
+    // Push BoardView immediately, it will receive data when ready
+    self.view_stack.push(Box::new(BoardView::new(id, name.to_string())));
+
+    let jira = self.jira.clone();
+    let tx = self.event_tx.clone();
+    let board_id = id;
+    let board_name = name.to_string();
+
+    tokio::spawn(async move {
+      let _ = tx.send(Event::Jira(JiraEvent::Loading));
+
+      // Fetch all board data in parallel
+      let (issues_result, config_result, filters_result) = tokio::join!(
+        jira.get_board_issues(board_id),
+        jira.get_board_configuration(board_id),
+        jira.get_board_quick_filters(board_id),
+      );
+
+      let issues = issues_result.unwrap_or_default();
+      let config = config_result.unwrap_or_else(|_| crate::jira::types::BoardConfiguration {
+        columns: Vec::new(),
+      });
+      let filters = filters_result.unwrap_or_default();
+
+      let _ = tx.send(Event::Jira(JiraEvent::BoardDataLoaded {
+        board_id,
+        board_name,
+        issues,
+        config,
+        filters,
+      }));
+    });
   }
 
   fn execute_command(&mut self, cmd: &str) {
@@ -290,5 +321,25 @@ impl App {
   /// Render command overlay if active
   pub fn render_command_overlay(&self, frame: &mut Frame, area: Rect) {
     self.command.render_overlay(frame, area);
+  }
+
+  /// Get current view's shortcuts
+  pub fn current_shortcuts(&self) -> Vec<Shortcut> {
+    self
+      .view_stack
+      .last()
+      .map(|v| v.shortcuts())
+      .unwrap_or_else(|| {
+        vec![
+          Shortcut::new(":", "command"),
+          Shortcut::new("/", "filter"),
+          Shortcut::new("q", "back"),
+        ]
+      })
+  }
+
+  /// Get header line count from current view
+  pub fn header_lines(&self) -> u16 {
+    self.view_stack.last().map(|v| v.header_lines()).unwrap_or(1)
   }
 }

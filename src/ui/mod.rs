@@ -9,17 +9,25 @@ use renderfns::{draw_footer, draw_header};
 
 /// Main draw function
 pub fn draw(frame: &mut Frame, app: &App) {
+  // Header is always 2 lines
   let chunks = Layout::default()
     .direction(Direction::Vertical)
     .constraints([
-      Constraint::Length(1), // Header
-      Constraint::Min(1),    // Main content
-      Constraint::Length(1), // Footer (breadcrumb)
+      Constraint::Length(2),  // Header (always 2 lines)
+      Constraint::Min(1),     // Main content
+      Constraint::Length(1),  // Footer (breadcrumb)
     ])
     .split(frame.area());
 
-  // Draw header
-  draw_header(frame, chunks[0], app.jira_url(), app.current_project());
+  // Draw header with dynamic shortcuts
+  let shortcuts = app.current_shortcuts();
+  draw_header(
+    frame,
+    chunks[0],
+    app.jira_url(),
+    app.current_project(),
+    &shortcuts,
+  );
 
   // Draw current view (view handles its own overlays like search)
   if let Some(view) = app.current_view() {

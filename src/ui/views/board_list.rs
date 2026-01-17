@@ -34,6 +34,7 @@ impl BoardListView {
 
     let block = Block::default()
       .title(title)
+      .title_alignment(Alignment::Center)
       .borders(Borders::ALL)
       .border_style(Style::default().fg(Color::Blue));
 
@@ -114,7 +115,10 @@ impl View for BoardListView {
       }
       KeyCode::Enter => {
         if let Some(board) = self.boards.get(self.selected) {
-          return ViewAction::LoadBoard { id: board.id };
+          return ViewAction::LoadBoard {
+            id: board.id,
+            name: board.name.clone(),
+          };
         }
       }
       KeyCode::Char('q') | KeyCode::Esc => return ViewAction::Quit,

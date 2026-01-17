@@ -36,6 +36,7 @@ impl IssueListView {
 
     let block = Block::default()
       .title(title)
+      .title_alignment(Alignment::Center)
       .borders(Borders::ALL)
       .border_style(Style::default().fg(Color::Blue));
 

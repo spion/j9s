@@ -24,6 +24,14 @@ pub enum JiraEvent {
   IssueLoaded(Box<crate::jira::types::Issue>),
   /// Boards loaded
   BoardsLoaded(Vec<crate::jira::types::Board>),
+  /// Board data loaded (issues, configuration, quick filters)
+  BoardDataLoaded {
+    board_id: u64,
+    board_name: String,
+    issues: Vec<crate::jira::types::IssueSummary>,
+    config: crate::jira::types::BoardConfiguration,
+    filters: Vec<crate::jira::types::QuickFilter>,
+  },
   /// Loading started (for spinner)
   Loading,
 }

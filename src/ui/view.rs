@@ -2,6 +2,19 @@ use crate::event::JiraEvent;
 use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 
+/// A keyboard shortcut hint for display in the header
+#[derive(Debug, Clone)]
+pub struct Shortcut {
+  pub key: &'static str,
+  pub label: &'static str,
+}
+
+impl Shortcut {
+  pub const fn new(key: &'static str, label: &'static str) -> Self {
+    Self { key, label }
+  }
+}
+
 /// Actions that a view can request in response to user input
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewAction {
@@ -10,7 +23,7 @@ pub enum ViewAction {
   /// Load full issue details
   LoadIssue { key: String },
   /// Load board details
-  LoadBoard { id: u64 },
+  LoadBoard { id: u64, name: String },
   /// Pop current view from stack (go back)
   Pop,
   /// Quit the application
@@ -45,5 +58,21 @@ pub trait View {
   fn receive_data(&mut self, event: &JiraEvent) -> bool {
     let _ = event;
     false
+  }
+
+  /// Get keyboard shortcuts to display in the header
+  /// Override this to provide view-specific shortcuts
+  fn shortcuts(&self) -> Vec<Shortcut> {
+    vec![
+      Shortcut::new(":", "command"),
+      Shortcut::new("/", "filter"),
+      Shortcut::new("q", "back"),
+    ]
+  }
+
+  /// Get the number of header lines needed for this view
+  /// Override this to request more header space for shortcuts
+  fn header_lines(&self) -> u16 {
+    1
   }
 }
