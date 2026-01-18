@@ -5,7 +5,21 @@ pub mod views;
 
 use crate::app::App;
 use ratatui::prelude::*;
+use ratatui::widgets::ListState;
 use renderfns::{draw_footer, draw_header};
+
+/// Ensure ListState selection is valid for the given item count.
+/// - No items → no selection
+/// - Has items but no selection → select first
+/// - Selection out of bounds → clamp to last item
+pub fn ensure_valid_selection(state: &mut ListState, len: usize) {
+  match (state.selected(), len) {
+    (_, 0) => state.select(None),
+    (None, _) => state.select(Some(0)),
+    (Some(i), len) if i >= len => state.select(Some(len - 1)),
+    _ => {}
+  }
+}
 
 /// Main draw function
 pub fn draw(frame: &mut Frame, app: &mut App) {

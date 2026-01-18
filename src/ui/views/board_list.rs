@@ -2,6 +2,7 @@ use crate::jira::client::JiraClient;
 use crate::jira::types::Board;
 use crate::query::{Query, QueryState};
 use crate::ui::components::{SearchInput, SearchResult};
+use crate::ui::ensure_valid_selection;
 use crate::ui::view::{View, ViewAction};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
@@ -40,6 +41,9 @@ impl BoardListView {
   }
 
   fn render_list(&mut self, frame: &mut Frame, area: Rect) {
+    let len = self.boards().len();
+    ensure_valid_selection(&mut self.list_state, len);
+
     let title = match self.query.state() {
       QueryState::Loading => " Boards (loading...) ".to_string(),
       QueryState::Error(e) => format!(" Boards (error: {}) ", e),

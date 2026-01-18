@@ -2,6 +2,7 @@ use crate::jira::client::JiraClient;
 use crate::jira::types::{BoardColumn, BoardConfiguration, IssueSummary, QuickFilter};
 use crate::query::{Query, QueryState};
 use crate::ui::components::{SearchInput, SearchResult};
+use crate::ui::ensure_valid_selection;
 use crate::ui::renderfns::{status_color, truncate};
 use crate::ui::view::{Shortcut, View, ViewAction};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -118,6 +119,9 @@ impl BoardView {
 
   /// Render list mode
   fn render_list(&mut self, frame: &mut Frame, area: Rect) {
+    let len = self.filtered_issues().len();
+    ensure_valid_selection(&mut self.list_state, len);
+
     let title = match self.query.state() {
       QueryState::Loading => format!(" {} (loading...) ", self.board_name),
       QueryState::Error(e) => format!(" {} (error: {}) ", self.board_name, e),
