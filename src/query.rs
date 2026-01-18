@@ -34,37 +34,30 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-/// The state of a query
-#[derive(Debug, Clone)]
-pub enum QueryState<T> {
+/// The state of a query (excludes cached data)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryState {
   /// Query has not been started
   Idle,
-  /// Query is currently fetching data
+  /// Query is currently fetching data (initial or refetch)
   Loading,
-  /// Query completed successfully
-  Success(T),
+  /// Query completed successfully (data stored separately)
+  Success,
   /// Query failed with an error
   Error(String),
 }
 
-impl<T> QueryState<T> {
+impl QueryState {
   pub fn is_loading(&self) -> bool {
     matches!(self, QueryState::Loading)
   }
 
   pub fn is_success(&self) -> bool {
-    matches!(self, QueryState::Success(_))
+    matches!(self, QueryState::Success)
   }
 
   pub fn is_error(&self) -> bool {
     matches!(self, QueryState::Error(_))
-  }
-
-  pub fn data(&self) -> Option<&T> {
-    match self {
-      QueryState::Success(data) => Some(data),
-      _ => None,
-    }
   }
 
   pub fn error(&self) -> Option<&str> {
@@ -86,10 +79,12 @@ type FetcherFn<T> = Box<dyn Fn() -> BoxFuture<T> + Send + Sync>;
 /// Query<T> encapsulates:
 /// - The fetching logic (via a closure)
 /// - Loading/success/error states
+/// - Cached data that persists during refetch
 /// - Async result handling via channels
 /// - Optional stale time tracking for cache invalidation
 pub struct Query<T> {
-  state: QueryState<T>,
+  state: QueryState,
+  cached_data: Option<T>,
   fetcher: FetcherFn<T>,
   receiver: Option<mpsc::UnboundedReceiver<Result<T, String>>>,
   fetched_at: Option<Instant>,
@@ -122,6 +117,7 @@ impl<T: Send + 'static> Query<T> {
   {
     Self {
       state: QueryState::Idle,
+      cached_data: None,
       fetcher: Box::new(move || Box::pin(fetcher())),
       receiver: None,
       fetched_at: None,
@@ -138,23 +134,29 @@ impl<T: Send + 'static> Query<T> {
   }
 
   /// Get the current state of the query.
-  pub fn state(&self) -> &QueryState<T> {
+  pub fn state(&self) -> &QueryState {
     &self.state
   }
 
-  /// Get the data if the query succeeded.
+  /// Get the cached data if available.
+  /// Returns data even during refetch (stale-while-revalidate).
   pub fn data(&self) -> Option<&T> {
-    self.state.data()
+    self.cached_data.as_ref()
   }
 
-  /// Check if the query is currently loading.
+  /// Check if the query is currently loading (initial fetch or refetch).
   pub fn is_loading(&self) -> bool {
     self.state.is_loading()
   }
 
-  /// Check if the query succeeded.
+  /// Check if we're refetching (loading while having cached data).
+  pub fn is_refetching(&self) -> bool {
+    self.state.is_loading() && self.cached_data.is_some()
+  }
+
+  /// Check if the query has data (either fresh or cached during refetch).
   pub fn is_success(&self) -> bool {
-    self.state.is_success()
+    self.cached_data.is_some()
   }
 
   /// Check if the query failed.
@@ -169,12 +171,13 @@ impl<T: Send + 'static> Query<T> {
 
   /// Check if the data is stale (older than stale_time).
   pub fn is_stale(&self) -> bool {
-    match &self.state {
-      QueryState::Success(_) => self
+    if self.cached_data.is_some() {
+      self
         .fetched_at
         .map(|t| t.elapsed() > self.stale_time)
-        .unwrap_or(true),
-      _ => false,
+        .unwrap_or(true)
+    } else {
+      false
     }
   }
 
@@ -189,6 +192,7 @@ impl<T: Send + 'static> Query<T> {
   }
 
   /// Force a refetch, even if already loading or data exists.
+  /// Cached data is preserved and available via `data()` during refetch.
   pub fn refetch(&mut self) {
     // Cancel any pending fetch by dropping the receiver
     self.receiver = None;
@@ -208,13 +212,15 @@ impl<T: Send + 'static> Query<T> {
     // Try to receive without blocking
     match receiver.try_recv() {
       Ok(Ok(data)) => {
-        self.state = QueryState::Success(data);
+        self.cached_data = Some(data);
+        self.state = QueryState::Success;
         self.fetched_at = Some(Instant::now());
         self.receiver = None;
         true
       }
       Ok(Err(error)) => {
         self.state = QueryState::Error(error);
+        // Keep cached_data on error - stale data is better than no data
         self.receiver = None;
         true
       }
@@ -233,6 +239,7 @@ impl<T: Send + 'static> Query<T> {
     let (tx, rx) = mpsc::unbounded_channel();
     self.receiver = Some(rx);
     self.state = QueryState::Loading;
+    // Note: cached_data is NOT cleared - preserves stale-while-revalidate
 
     let future = (self.fetcher)();
     tokio::spawn(async move {
@@ -250,6 +257,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Query<T> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("Query")
       .field("state", &self.state)
+      .field("has_data", &self.cached_data.is_some())
       .field("fetched_at", &self.fetched_at)
       .field("stale_time", &self.stale_time)
       .finish_non_exhaustive()
@@ -264,7 +272,7 @@ mod tests {
   async fn test_query_success() {
     let mut query = Query::new(|| async { Ok::<_, String>(vec![1, 2, 3]) });
 
-    assert!(matches!(query.state(), QueryState::Idle));
+    assert!(*query.state() == QueryState::Idle);
 
     query.fetch();
     assert!(query.is_loading());
@@ -314,6 +322,23 @@ mod tests {
     // Second fetch should be no-op
     query.fetch();
     assert!(query.is_loading());
+  }
+
+  #[tokio::test]
+  async fn test_refetch_preserves_data() {
+    let mut query = Query::new(|| async { Ok::<_, String>(42) });
+
+    query.fetch();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    query.poll();
+    assert_eq!(query.data(), Some(&42));
+
+    // Refetch should preserve cached data
+    query.refetch();
+    assert!(query.is_loading());
+    assert!(query.is_refetching());
+    // Data still available during refetch!
+    assert_eq!(query.data(), Some(&42));
   }
 
   #[tokio::test]

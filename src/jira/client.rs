@@ -1,10 +1,9 @@
 use crate::config::Config;
 use crate::jira::types::{
-  Board, BoardColumn, BoardConfiguration, Issue, IssueSummary, QuickFilter,
+  Board, BoardColumn, BoardConfiguration, Issue, IssueSummary, QuickFilter, StatusInfo,
 };
 use color_eyre::{eyre::eyre, Result};
 use serde_json::Value;
-use tracing::info;
 
 /// Jira API client wrapper
 #[derive(Clone)]
@@ -265,10 +264,14 @@ impl JiraClient {
                 statuses
                   .iter()
                   .filter_map(|s| {
-                    s.get("self")
-                      .and_then(|_| s.get("id"))
+                    let id = s.get("id").and_then(|v| v.as_str())?.to_string();
+                    // Get status name, fall back to id if not present
+                    let name = s
+                      .get("name")
                       .and_then(|v| v.as_str())
-                      .and_then(|v| Some(v.to_string()))
+                      .map(|n| n.to_string())
+                      .unwrap_or_else(|| id.clone());
+                    Some(StatusInfo { id, name })
                   })
                   .collect()
               })
@@ -281,6 +284,48 @@ impl JiraClient {
       .unwrap_or_default();
 
     Ok(BoardConfiguration { columns })
+  }
+
+  /// Update issue status by finding and executing the appropriate transition
+  pub async fn update_issue_status(&self, issue_key: &str, status_id: &str) -> Result<()> {
+    // Get available transitions
+    let endpoint = format!("/issue/{}/transitions", issue_key);
+    let response: Value = self
+      .client
+      .get("api", &endpoint)
+      .await
+      .map_err(|e| eyre!("Failed to get transitions: {}", e))?;
+
+    // Find transition that leads to target status
+    let transition_id = response
+      .get("transitions")
+      .and_then(|v| v.as_array())
+      .and_then(|arr| {
+        arr.iter().find_map(|t| {
+          let to_status_id = t.get("to")?.get("id")?.as_str()?;
+          if to_status_id == status_id {
+            t.get("id")?.as_str().map(|s| s.to_string())
+          } else {
+            None
+          }
+        })
+      })
+      .ok_or_else(|| eyre!("No transition available to status {}", status_id))?;
+
+    // Execute the transition
+    let body = serde_json::json!({
+      "transition": {
+        "id": transition_id
+      }
+    });
+
+    self
+      .client
+      .post::<Value, _>("api", &endpoint, body)
+      .await
+      .map_err(|e| eyre!("Failed to execute transition: {}", e))?;
+
+    Ok(())
   }
 
   /// Get quick filters for a board

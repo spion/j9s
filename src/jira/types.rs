@@ -44,11 +44,18 @@ pub struct Epic {
   pub status: String,
 }
 
+/// Status info with id and human-readable name
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatusInfo {
+  pub id: String,
+  pub name: String,
+}
+
 /// Board column configuration
 #[derive(Debug, Clone)]
 pub struct BoardColumn {
   pub name: String,
-  pub statuses: Vec<String>, // Status ids that map to this column
+  pub statuses: Vec<StatusInfo>, // Status info that maps to this column
 }
 
 /// Board configuration with columns

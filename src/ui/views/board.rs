@@ -1,14 +1,14 @@
 use crate::jira::client::JiraClient;
-use crate::jira::types::{BoardColumn, BoardConfiguration, IssueSummary, QuickFilter};
+use crate::jira::types::{BoardColumn, BoardConfiguration, IssueSummary, QuickFilter, StatusInfo};
 use crate::query::{Query, QueryState};
-use crate::ui::components::{SearchInput, SearchResult};
+use crate::ui::components::{SearchInput, SearchResult, StatusPicker, StatusPickerResult};
 use crate::ui::ensure_valid_selection;
 use crate::ui::renderfns::{status_color, truncate};
 use crate::ui::view::{Shortcut, View, ViewAction};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
-use tracing::info;
+use tracing::{debug, info};
 
 /// Combined board data fetched in parallel
 #[derive(Clone)]
@@ -23,6 +23,9 @@ pub struct BoardView {
   board_id: u64,
   board_name: String,
 
+  // Jira client for API calls
+  jira: JiraClient,
+
   // Data query
   query: Query<BoardData>,
 
@@ -36,12 +39,19 @@ pub struct BoardView {
 
   // Components
   search: SearchInput,
+  status_picker: StatusPicker,
+
+  // Status update state
+  pending_issue_key: Option<String>, // Issue key waiting for status picker selection
+  status_mutation: Option<Query<()>>,
+  error_message: Option<String>,
 }
 
 impl BoardView {
   pub fn new(board_id: u64, board_name: String, jira: JiraClient) -> Self {
+    let jira_for_query = jira.clone();
     let mut query = Query::new(move || {
-      let jira = jira.clone();
+      let jira = jira_for_query.clone();
       async move {
         // Fetch all board data in parallel
         let (issues_result, config_result, filters_result) = tokio::join!(
@@ -70,6 +80,7 @@ impl BoardView {
     Self {
       board_id,
       board_name,
+      jira,
       query,
       list_state: ListState::default(),
       swimlane_selected: 0,
@@ -78,6 +89,10 @@ impl BoardView {
       filter_bar_active: false,
       swimlane_mode: false,
       search: SearchInput::new(),
+      status_picker: StatusPicker::new(),
+      pending_issue_key: None,
+      status_mutation: None,
+      error_message: None,
     }
   }
 
@@ -114,7 +129,7 @@ impl BoardView {
     self
       .filtered_issues()
       .into_iter()
-      .filter(|issue| column.statuses.contains(&issue.status_id))
+      .filter(|issue| column.statuses.iter().any(|s| s.id == issue.status_id))
       .collect()
   }
 
@@ -194,7 +209,12 @@ impl BoardView {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Blue));
 
-      let paragraph = Paragraph::new("No columns configured for this board.")
+      let content = if self.is_loading() {
+        "Loading..."
+      } else {
+        "No columns configured for this board."
+      };
+      let paragraph = Paragraph::new(content)
         .block(block)
         .style(Style::default().fg(Color::DarkGray));
       frame.render_widget(paragraph, area);
@@ -388,10 +408,152 @@ impl BoardView {
     // Reset list selection when changing filter
     self.list_state.select(Some(0));
   }
+
+  /// Initiate a status change to the target column
+  fn initiate_status_change(&mut self, target_col_idx: usize) {
+    // Clear any previous error
+    self.error_message = None;
+
+    info!(
+      "Initiating status change to column index {}",
+      target_col_idx
+    );
+    let issue = match self.selected_issue() {
+      Some(issue) => issue.clone(),
+      None => {
+        self.error_message = Some("No issue selected".to_string());
+        return;
+      }
+    };
+
+    // Get target column's statuses
+    let target_statuses: Vec<StatusInfo> = self
+      .columns()
+      .get(target_col_idx)
+      .map(|col| col.statuses.clone())
+      .unwrap_or_default();
+
+    if target_statuses.is_empty() {
+      self.error_message = Some("Target column has no statuses".to_string());
+      return;
+    }
+
+    if target_statuses.len() == 1 {
+      // Single status - update directly
+      info!(
+        "Updating issue {} to status {}",
+        issue.key, target_statuses[0].name
+      );
+      self.update_issue_status(&issue.key, &target_statuses[0].id);
+    } else {
+      // Multiple statuses - show picker
+      self.pending_issue_key = Some(issue.key.clone());
+      self
+        .status_picker
+        .show("Select Status".to_string(), target_statuses);
+    }
+  }
+
+  /// Update an issue's status directly
+  fn update_issue_status(&mut self, issue_key: &str, status_id: &str) {
+    let jira = self.jira.clone();
+    let key = issue_key.to_string();
+    let sid = status_id.to_string();
+    let mut query = Query::new(move || {
+      let jira = jira.clone();
+      let key = key.clone();
+      let sid = sid.clone();
+      async move {
+        jira
+          .update_issue_status(&key, &sid)
+          .await
+          .map_err(|e| e.to_string())
+      }
+    });
+    query.fetch();
+    self.status_mutation = Some(query);
+  }
+
+  /// Process the result of a status update mutation
+  fn process_status_mutation(&mut self) {
+    let query = match &self.status_mutation {
+      Some(q) => q,
+      None => return,
+    };
+
+    if query.is_loading() {
+      return;
+    }
+
+    if let Some(err) = query.error() {
+      self.error_message = Some(format!("Status update failed: {}", err));
+    } else {
+      // Success - refetch board data
+      self.query.refetch();
+    }
+
+    self.status_mutation = None;
+  }
+
+  /// Render error message if present
+  fn render_error(&self, frame: &mut Frame, area: Rect) {
+    if let Some(msg) = &self.error_message {
+      // Calculate dimensions - wider popup for detailed errors
+      let max_width = (area.width * 80 / 100).min(70).max(40);
+      let inner_width = max_width.saturating_sub(2) as usize;
+
+      // Estimate height needed (rough approximation for wrapped text)
+      let line_count = msg.lines().count();
+      let char_count = msg.len();
+      let estimated_lines = (char_count / inner_width).max(line_count) + 1;
+      let height = (estimated_lines as u16 + 2).min(area.height - 4).max(5);
+
+      // Center the popup
+      let x = area.x + (area.width.saturating_sub(max_width)) / 2;
+      let y = area.y + (area.height.saturating_sub(height)) / 2;
+
+      let error_area = Rect::new(x, y, max_width, height);
+      frame.render_widget(ratatui::widgets::Clear, error_area);
+
+      let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red))
+        .title(" Error - press any key to dismiss ");
+
+      let paragraph = Paragraph::new(msg.as_str())
+        .block(block)
+        .style(Style::default().fg(Color::Red))
+        .wrap(ratatui::widgets::Wrap { trim: false });
+
+      frame.render_widget(paragraph, error_area);
+    }
+  }
 }
 
 impl View for BoardView {
   fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
+    // Clear error message on any key press
+    self.error_message = None;
+
+    // Handle status picker first if active
+    if self.status_picker.is_active() {
+      match self.status_picker.handle_key(key) {
+        StatusPickerResult::Active => return ViewAction::None,
+        StatusPickerResult::Selected(status_id) => {
+          // Execute status update with selected status
+          if let Some(issue_key) = self.pending_issue_key.take() {
+            self.update_issue_status(&issue_key, &status_id);
+          }
+          return ViewAction::None;
+        }
+        StatusPickerResult::Cancelled => {
+          self.pending_issue_key = None;
+          return ViewAction::None;
+        }
+        StatusPickerResult::NotHandled => {}
+      }
+    }
+
     // Let search component try to handle first
     match self.search.handle_key(key) {
       SearchResult::Active => return ViewAction::None,
@@ -403,83 +565,96 @@ impl View for BoardView {
       SearchResult::NotHandled => {}
     }
 
-    // Normal mode key handling
     match key.code {
-      // Vertical navigation
-      KeyCode::Char('j') | KeyCode::Down => {
-        if self.swimlane_mode {
-          self.navigate_swimlane(1, false);
-        } else {
-          self.navigate_list(1);
-        }
-      }
-      KeyCode::Char('k') | KeyCode::Up => {
-        if self.swimlane_mode {
-          self.navigate_swimlane(-1, false);
-        } else {
-          self.navigate_list(-1);
-        }
-      }
-
       // Filter tab navigation (when filter bar active)
-      KeyCode::Char('h') | KeyCode::Left => {
+      KeyCode::PageUp => {
         if self.filter_bar_active && !self.quick_filters().is_empty() {
           self.navigate_filter(-1);
         }
       }
-      KeyCode::Char('l') | KeyCode::Right => {
+      KeyCode::PageDown => {
         if self.filter_bar_active && !self.quick_filters().is_empty() {
           self.navigate_filter(1);
         }
       }
-
-      // Swimlane column navigation (when swimlane mode active)
-      KeyCode::PageUp => {
-        if self.swimlane_mode {
-          self.navigate_swimlane(-1, true);
-        }
-      }
-      KeyCode::PageDown => {
-        if self.swimlane_mode {
-          self.navigate_swimlane(1, true);
-        }
-      }
-
-      // Toggle filter bar
       KeyCode::Char('f') => {
         if !self.quick_filters().is_empty() {
           self.filter_bar_active = !self.filter_bar_active;
         }
       }
-
-      // Toggle swimlane mode
       KeyCode::Char('s') => {
         self.swimlane_mode = !self.swimlane_mode;
         self.list_state.select(Some(0));
         self.swimlane_selected = 0;
         self.selected_column = 0;
       }
-
       // Refresh
       KeyCode::Char('r') => {
         self.query.refetch();
       }
-
-      // Open issue detail
-      KeyCode::Enter => {
-        if let Some(issue) = self.selected_issue() {
-          return ViewAction::PushIssueDetail {
-            key: issue.key.clone(),
-          };
-        }
-      }
-
-      // Back
-      KeyCode::Char('q') | KeyCode::Esc => return ViewAction::Pop,
-
       _ => {}
     }
-    ViewAction::None
+
+    if self.swimlane_mode {
+      match key.code {
+        KeyCode::Char('h') | KeyCode::Left => {
+          if key.modifiers.contains(KeyModifiers::SHIFT) {
+            // Shift+Left: Transition to previous column
+            if self.selected_column > 0 {
+              self.initiate_status_change(self.selected_column - 1);
+            }
+          } else {
+            self.navigate_swimlane(-1, true);
+          }
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+          if key.modifiers.contains(KeyModifiers::SHIFT) {
+            // Shift+Right: Transition to next column
+            let num_columns = self.columns().len();
+            if self.selected_column + 1 < num_columns {
+              self.initiate_status_change(self.selected_column + 1);
+            }
+          } else {
+            self.navigate_swimlane(1, true);
+          }
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+          self.navigate_swimlane(1, false);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+          self.navigate_swimlane(-1, false);
+        }
+
+        _ => {}
+      }
+      ViewAction::None
+    } else {
+      // Normal mode key handling
+      match key.code {
+        // Vertical navigation
+        KeyCode::Char('j') | KeyCode::Down => {
+          self.navigate_list(1);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+          self.navigate_list(-1);
+        }
+
+        // Open issue detail
+        KeyCode::Enter => {
+          if let Some(issue) = self.selected_issue() {
+            return ViewAction::PushIssueDetail {
+              key: issue.key.clone(),
+            };
+          }
+        }
+
+        // Back
+        KeyCode::Char('q') | KeyCode::Esc => return ViewAction::Pop,
+
+        _ => {}
+      }
+      ViewAction::None
+    }
   }
 
   fn render(&mut self, frame: &mut Frame, area: Rect) {
@@ -509,6 +684,12 @@ impl View for BoardView {
 
     // Let search component render its overlay
     self.search.render_overlay(frame, area);
+
+    // Render status picker if active
+    self.status_picker.render_overlay(frame, area);
+
+    // Render error message if present
+    self.render_error(frame, area);
   }
 
   fn breadcrumb_label(&self) -> String {
@@ -521,6 +702,14 @@ impl View for BoardView {
 
   fn tick(&mut self) {
     self.query.poll();
+
+    // Poll status mutation if in progress
+    if let Some(ref mut query) = self.status_mutation {
+      if query.poll() {
+        // Mutation completed, process the result
+        self.process_status_mutation();
+      }
+    }
   }
 
   fn shortcuts(&self) -> Vec<Shortcut> {
@@ -544,6 +733,7 @@ impl View for BoardView {
       shortcuts.push(Shortcut::new("s", "swimlane"));
       if self.swimlane_mode {
         shortcuts.push(Shortcut::new("PgUp/Dn", "column"));
+        shortcuts.push(Shortcut::new("S-PgUp/Dn", "transition"));
       }
     }
 
