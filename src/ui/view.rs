@@ -15,18 +15,13 @@ impl Shortcut {
 }
 
 /// Actions that a view can request in response to user input
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewAction {
   /// No action needed
   None,
-  /// Load full issue details and push detail view
-  PushIssueDetail { key: String },
-  /// Load board details and push board view
-  PushBoard { id: u64, name: String },
+  /// Push a new view onto the stack
+  Push(Box<dyn View>),
   /// Pop current view from stack (go back)
   Pop,
-  /// Quit the application
-  Quit,
 }
 
 /// Trait for view behavior

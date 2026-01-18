@@ -5,12 +5,14 @@ use crate::ui::components::{SearchInput, SearchResult};
 use crate::ui::ensure_valid_selection;
 use crate::ui::renderfns::{status_color, truncate};
 use crate::ui::view::{View, ViewAction};
+use crate::ui::views::IssueDetailView;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 /// View for displaying a list of issues
 pub struct IssueListView {
+  jira: JiraClient,
   project: String,
   query: Query<Vec<IssueSummary>>,
   list_state: ListState,
@@ -30,9 +32,9 @@ impl IssueListView {
       Query::new(|| async { Ok(Vec::new()) })
     } else {
       // Create query with the JiraClient
-      let jira = jira.clone();
+      let jira_for_query = jira.clone();
       Query::new(move || {
-        let jira = jira.clone();
+        let jira = jira_for_query.clone();
         let jql = jql.clone();
         async move { jira.search_issues(&jql).await.map_err(|e| e.to_string()) }
       })
@@ -42,6 +44,7 @@ impl IssueListView {
     query.fetch();
 
     Self {
+      jira,
       project,
       query,
       list_state: ListState::default(),
@@ -152,13 +155,14 @@ impl View for IssueListView {
       KeyCode::Enter => {
         if let Some(idx) = self.list_state.selected() {
           if let Some(issue) = self.issues().get(idx) {
-            return ViewAction::PushIssueDetail {
-              key: issue.key.clone(),
-            };
+            return ViewAction::Push(Box::new(IssueDetailView::new(
+              issue.key.clone(),
+              self.jira.clone(),
+            )));
           }
         }
       }
-      KeyCode::Char('q') | KeyCode::Esc => return ViewAction::Quit,
+      KeyCode::Char('q') | KeyCode::Esc => return ViewAction::Pop,
       _ => {}
     }
     ViewAction::None

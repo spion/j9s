@@ -4,12 +4,14 @@ use crate::query::{Query, QueryState};
 use crate::ui::components::{SearchInput, SearchResult};
 use crate::ui::ensure_valid_selection;
 use crate::ui::view::{View, ViewAction};
+use crate::ui::views::BoardView;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 /// View for displaying a list of boards
 pub struct BoardListView {
+  jira: JiraClient,
   query: Query<Vec<Board>>,
   list_state: ListState,
   search: SearchInput,
@@ -17,8 +19,9 @@ pub struct BoardListView {
 
 impl BoardListView {
   pub fn new(jira: JiraClient) -> Self {
+    let jira_for_query = jira.clone();
     let mut query = Query::new(move || {
-      let jira = jira.clone();
+      let jira = jira_for_query.clone();
       async move { jira.get_boards().await.map_err(|e| e.to_string()) }
     });
 
@@ -26,6 +29,7 @@ impl BoardListView {
     query.fetch();
 
     Self {
+      jira,
       query,
       list_state: ListState::default(),
       search: SearchInput::new(),
@@ -129,14 +133,15 @@ impl View for BoardListView {
       KeyCode::Enter => {
         if let Some(idx) = self.list_state.selected() {
           if let Some(board) = self.boards().get(idx) {
-            return ViewAction::PushBoard {
-              id: board.id,
-              name: board.name.clone(),
-            };
+            return ViewAction::Push(Box::new(BoardView::new(
+              board.id,
+              board.name.clone(),
+              self.jira.clone(),
+            )));
           }
         }
       }
-      KeyCode::Char('q') | KeyCode::Esc => return ViewAction::Quit,
+      KeyCode::Char('q') | KeyCode::Esc => return ViewAction::Pop,
       _ => {}
     }
     ViewAction::None

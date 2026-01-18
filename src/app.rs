@@ -4,7 +4,7 @@ use crate::jira::client::JiraClient;
 use crate::ui;
 use crate::ui::components::{CommandInput, CommandResult};
 use crate::ui::view::{Shortcut, View, ViewAction};
-use crate::ui::views::{BoardListView, BoardView, IssueDetailView, IssueListView};
+use crate::ui::views::{BoardListView, IssueListView};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{
@@ -111,18 +111,10 @@ impl App {
     // Delegate to current view
     if let Some(view) = self.view_stack.last_mut() {
       match view.handle_key(key) {
-        ViewAction::PushIssueDetail { key } => {
-          self.push_issue_detail(&key);
-        }
-        ViewAction::PushBoard { id, name } => {
-          self.push_board(id, &name);
+        ViewAction::Push(new_view) => {
+          self.view_stack.push(new_view);
         }
         ViewAction::Pop => {
-          if self.view_stack.len() > 1 {
-            self.view_stack.pop();
-          }
-        }
-        ViewAction::Quit => {
           if self.view_stack.len() > 1 {
             self.view_stack.pop();
           }
@@ -130,21 +122,6 @@ impl App {
         ViewAction::None => {}
       }
     }
-  }
-
-  fn push_issue_detail(&mut self, key: &str) {
-    self.view_stack.push(Box::new(IssueDetailView::new(
-      key.to_string(),
-      self.jira.clone(),
-    )));
-  }
-
-  fn push_board(&mut self, id: u64, name: &str) {
-    self.view_stack.push(Box::new(BoardView::new(
-      id,
-      name.to_string(),
-      self.jira.clone(),
-    )));
   }
 
   fn execute_command(&mut self, cmd: &str) {

@@ -5,6 +5,7 @@ use crate::ui::components::{SearchInput, SearchResult, StatusPicker, StatusPicke
 use crate::ui::ensure_valid_selection;
 use crate::ui::renderfns::{status_color, truncate};
 use crate::ui::view::{Shortcut, View, ViewAction};
+use crate::ui::views::IssueDetailView;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
@@ -642,9 +643,10 @@ impl View for BoardView {
         // Open issue detail
         KeyCode::Enter => {
           if let Some(issue) = self.selected_issue() {
-            return ViewAction::PushIssueDetail {
-              key: issue.key.clone(),
-            };
+            return ViewAction::Push(Box::new(IssueDetailView::new(
+              issue.key.clone(),
+              self.jira.clone(),
+            )));
           }
         }
 
