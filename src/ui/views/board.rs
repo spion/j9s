@@ -111,15 +111,10 @@ impl BoardView {
 
   /// Get issues for a specific column (by status)
   fn issues_for_column(&self, column: &BoardColumn) -> Vec<&IssueSummary> {
-    // info!("Filtering issues for column: {:?}", column.statuses);
-
     self
       .filtered_issues()
       .into_iter()
-      .filter(|issue| {
-        info!("Checking issue {:?}", issue);
-        column.statuses.contains(&issue.status_id)
-      })
+      .filter(|issue| column.statuses.contains(&issue.status_id))
       .collect()
   }
 
@@ -235,12 +230,16 @@ impl BoardView {
       let items: Vec<ListItem> = issues
         .iter()
         .map(|issue| {
-          let line = Line::from(vec![Span::styled(
+          let issue_id = Line::from(vec![Span::styled(
             // truncate(&issue.key, col_area.width.saturating_sub(4) as usize),
             &issue.key,
             Style::default().fg(Color::Cyan),
           )]);
-          ListItem::new(line)
+          let issue_title = Line::from(vec![Span::raw(truncate(
+            &issue.summary,
+            col_area.width.saturating_sub(4) as usize,
+          ))]);
+          ListItem::new(vec![issue_id, issue_title])
         })
         .collect();
 
@@ -336,12 +335,9 @@ impl BoardView {
       }
 
       if direction > 0 {
-        self.selected_column = (self.selected_column + 1) % num_columns;
+        self.selected_column = (self.selected_column + 1).min(num_columns - 1);
       } else {
-        self.selected_column = self
-          .selected_column
-          .checked_sub(1)
-          .unwrap_or(num_columns - 1);
+        self.selected_column = self.selected_column.checked_sub(1).unwrap_or(0);
       }
       // Reset selection within new column
       self.swimlane_selected = 0;
@@ -354,9 +350,9 @@ impl BoardView {
         }
 
         if direction > 0 {
-          self.swimlane_selected = (self.swimlane_selected + 1) % len;
+          self.swimlane_selected = (self.swimlane_selected + 1).min(len - 1);
         } else {
-          self.swimlane_selected = self.swimlane_selected.checked_sub(1).unwrap_or(len - 1);
+          self.swimlane_selected = self.swimlane_selected.checked_sub(1).unwrap_or(0);
         }
       }
     }
