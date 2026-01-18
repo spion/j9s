@@ -1,5 +1,6 @@
-use crate::event::JiraEvent;
+use crate::jira::client::JiraClient;
 use crate::jira::types::Board;
+use crate::query::{Query, QueryState};
 use crate::ui::components::{SearchInput, SearchResult};
 use crate::ui::view::{View, ViewAction};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -7,29 +8,42 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 /// View for displaying a list of boards
-#[derive(Debug)]
 pub struct BoardListView {
-  pub boards: Vec<Board>,
-  pub loading: bool,
+  query: Query<Vec<Board>>,
   list_state: ListState,
   search: SearchInput,
 }
 
 impl BoardListView {
-  pub fn new() -> Self {
+  pub fn new(jira: JiraClient) -> Self {
+    let mut query = Query::new(move || {
+      let jira = jira.clone();
+      async move { jira.get_boards().await.map_err(|e| e.to_string()) }
+    });
+
+    // Start fetching immediately
+    query.fetch();
+
     Self {
-      boards: Vec::new(),
-      loading: true,
+      query,
       list_state: ListState::default(),
       search: SearchInput::new(),
     }
   }
 
+  fn boards(&self) -> &[Board] {
+    self.query.data().map(|v| v.as_slice()).unwrap_or(&[])
+  }
+
+  fn is_loading(&self) -> bool {
+    self.query.is_loading()
+  }
+
   fn render_list(&mut self, frame: &mut Frame, area: Rect) {
-    let title = if self.loading {
-      " Boards (loading...) ".to_string()
-    } else {
-      format!(" Boards ({}) ", self.boards.len())
+    let title = match self.query.state() {
+      QueryState::Loading => " Boards (loading...) ".to_string(),
+      QueryState::Error(e) => format!(" Boards (error: {}) ", e),
+      _ => format!(" Boards ({}) ", self.boards().len()),
     };
 
     let block = Block::default()
@@ -38,16 +52,22 @@ impl BoardListView {
       .borders(Borders::ALL)
       .border_style(Style::default().fg(Color::Blue));
 
-    if self.boards.is_empty() && !self.loading {
-      let paragraph = Paragraph::new("No boards found.")
+    if self.boards().is_empty() && !self.is_loading() {
+      let content = if self.query.is_error() {
+        "Failed to load boards. Press 'r' to retry."
+      } else {
+        "No boards found."
+      };
+      let paragraph = Paragraph::new(content)
         .block(block)
         .style(Style::default().fg(Color::DarkGray));
       frame.render_widget(paragraph, area);
       return;
     }
 
+    // Collect items first to avoid borrow conflicts with list_state
     let items: Vec<ListItem> = self
-      .boards
+      .boards()
       .iter()
       .map(|board| {
         let line = Line::from(vec![
@@ -58,7 +78,7 @@ impl BoardListView {
             Style::default().fg(Color::Yellow),
           ),
           Span::raw(" "),
-          Span::raw(&board.name),
+          Span::raw(board.name.clone()),
         ]);
         ListItem::new(line)
       })
@@ -74,12 +94,6 @@ impl BoardListView {
       .highlight_symbol("> ");
 
     frame.render_stateful_widget(list, area, &mut self.list_state);
-  }
-}
-
-impl Default for BoardListView {
-  fn default() -> Self {
-    Self::new()
   }
 }
 
@@ -104,10 +118,14 @@ impl View for BoardListView {
       KeyCode::Char('k') | KeyCode::Up => {
         self.list_state.select_previous();
       }
+      KeyCode::Char('r') => {
+        // Refresh
+        self.query.refetch();
+      }
       KeyCode::Enter => {
         if let Some(idx) = self.list_state.selected() {
-          if let Some(board) = self.boards.get(idx) {
-            return ViewAction::LoadBoard {
+          if let Some(board) = self.boards().get(idx) {
+            return ViewAction::PushBoard {
               id: board.id,
               name: board.name.clone(),
             };
@@ -130,18 +148,7 @@ impl View for BoardListView {
     "Boards".to_string()
   }
 
-  fn set_loading(&mut self, loading: bool) {
-    self.loading = loading;
-  }
-
-  fn receive_data(&mut self, event: &JiraEvent) -> bool {
-    match event {
-      JiraEvent::BoardsLoaded(boards) => {
-        self.boards = boards.clone();
-        self.loading = false;
-        true
-      }
-      _ => false,
-    }
+  fn tick(&mut self) {
+    self.query.poll();
   }
 }

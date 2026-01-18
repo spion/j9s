@@ -8,7 +8,8 @@
 ## Project Structure
 
 - `src/app.rs` - Main app state and event loop
-- `src/event.rs` - Event types and channel setup
+- `src/event.rs` - Event types (Key, Tick)
+- `src/query.rs` - Query<T> for async data fetching
 - `src/config.rs` - XDG-compliant config loading
 - `src/ui/` - All UI code (see below)
 - `src/jira/` - Gouqi wrapper and types
@@ -26,8 +27,9 @@ src/ui/
 │   └── command_input.rs # CommandInput - wraps TextInput + autocomplete
 ├── views/           # View structs with co-located rendering
 │   ├── issue_list.rs    # IssueListView
+│   ├── issue_detail.rs  # IssueDetailView
 │   ├── board_list.rs    # BoardListView
-│   └── issue_detail.rs  # IssueDetailView
+│   └── board.rs         # BoardView (kanban/list)
 └── renderfns/       # Purely stateless render functions
     ├── header.rs
     └── footer.rs
@@ -51,13 +53,38 @@ Uses k9s-style navigation:
 - `Enter` pushes detail views
 - `Escape`/`q` pops back
 
-## Async Pattern
+## Data Fetching with Query<T>
 
-Message-passing for async:
-- UI loop owns all state
-- Async tasks send results via channel (`Event::Jira`)
-- Views implement `receive_data()` to handle async results
-- No shared mutable state across async boundaries
+Views own their data loading via `Query<T>` (inspired by TanStack Query):
+
+```rust
+// View creates and owns its query
+let mut query = Query::new(move || {
+    let jira = jira.clone();
+    async move { jira.search_issues(&jql).await.map_err(|e| e.to_string()) }
+});
+query.fetch();  // Start loading immediately
+
+// In tick() - poll for results
+fn tick(&mut self) {
+    self.query.poll();
+}
+
+// In render() - use query state
+match self.query.state() {
+    QueryState::Loading => render_spinner(),
+    QueryState::Success(data) => render_data(data),
+    QueryState::Error(e) => render_error(e),
+    QueryState::Idle => {}
+}
+```
+
+**Key points:**
+- Views take `JiraClient` in constructor and create their own queries
+- `Query<T>` handles loading/success/error states internally
+- App calls `tick()` on all views each tick to poll queries
+- No event routing needed - views are self-contained
+- Testable: create view with mock fetcher, call methods, check state
 
 ## Environment
 

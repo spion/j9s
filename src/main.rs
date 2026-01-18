@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod event;
 mod jira;
+mod query;
 mod ui;
 
 use clap::Parser;

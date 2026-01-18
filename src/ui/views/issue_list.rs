@@ -1,5 +1,6 @@
-use crate::event::JiraEvent;
+use crate::jira::client::JiraClient;
 use crate::jira::types::IssueSummary;
+use crate::query::{Query, QueryState};
 use crate::ui::components::{SearchInput, SearchResult};
 use crate::ui::renderfns::{status_color, truncate};
 use crate::ui::view::{View, ViewAction};
@@ -8,31 +9,58 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 /// View for displaying a list of issues
-#[derive(Debug)]
 pub struct IssueListView {
-  pub issues: Vec<IssueSummary>,
-  pub project: String,
-  pub loading: bool,
+  project: String,
+  query: Query<Vec<IssueSummary>>,
   list_state: ListState,
   search: SearchInput,
 }
 
 impl IssueListView {
-  pub fn new(project: String) -> Self {
+  pub fn new(project: String, jira: JiraClient) -> Self {
+    let jql = if project.is_empty() {
+      String::new()
+    } else {
+      format!("project = {} ORDER BY updated DESC", project)
+    };
+
+    let mut query = if jql.is_empty() {
+      // No project configured - create a query that returns empty results
+      Query::new(|| async { Ok(Vec::new()) })
+    } else {
+      // Create query with the JiraClient
+      let jira = jira.clone();
+      Query::new(move || {
+        let jira = jira.clone();
+        let jql = jql.clone();
+        async move { jira.search_issues(&jql).await.map_err(|e| e.to_string()) }
+      })
+    };
+
+    // Start fetching immediately
+    query.fetch();
+
     Self {
-      issues: Vec::new(),
       project,
-      loading: true,
+      query,
       list_state: ListState::default(),
       search: SearchInput::new(),
     }
   }
 
+  fn issues(&self) -> &[IssueSummary] {
+    self.query.data().map(|v| v.as_slice()).unwrap_or(&[])
+  }
+
+  fn is_loading(&self) -> bool {
+    self.query.is_loading()
+  }
+
   fn render_list(&mut self, frame: &mut Frame, area: Rect) {
-    let title = if self.loading {
-      format!(" Issues [{}] (loading...) ", self.project)
-    } else {
-      format!(" Issues [{}] ({}) ", self.project, self.issues.len())
+    let title = match self.query.state() {
+      QueryState::Loading => format!(" Issues [{}] (loading...) ", self.project),
+      QueryState::Error(e) => format!(" Issues [{}] (error: {}) ", self.project, e),
+      _ => format!(" Issues [{}] ({}) ", self.project, self.issues().len()),
     };
 
     let block = Block::default()
@@ -41,9 +69,11 @@ impl IssueListView {
       .borders(Borders::ALL)
       .border_style(Style::default().fg(Color::Blue));
 
-    if self.issues.is_empty() && !self.loading {
+    if self.issues().is_empty() && !self.is_loading() {
       let content = if self.project.is_empty() {
         "No project configured. Set default_project in config or use -p flag."
+      } else if self.query.is_error() {
+        "Failed to load issues. Press 'r' to retry."
       } else {
         "No issues found."
       };
@@ -55,7 +85,7 @@ impl IssueListView {
     }
 
     let items: Vec<ListItem> = self
-      .issues
+      .issues()
       .iter()
       .map(|issue| {
         let color = status_color(&issue.status);
@@ -111,10 +141,14 @@ impl View for IssueListView {
       KeyCode::Char('k') | KeyCode::Up => {
         self.list_state.select_previous();
       }
+      KeyCode::Char('r') => {
+        // Refresh
+        self.query.refetch();
+      }
       KeyCode::Enter => {
         if let Some(idx) = self.list_state.selected() {
-          if let Some(issue) = self.issues.get(idx) {
-            return ViewAction::LoadIssue {
+          if let Some(issue) = self.issues().get(idx) {
+            return ViewAction::PushIssueDetail {
               key: issue.key.clone(),
             };
           }
@@ -144,18 +178,7 @@ impl View for IssueListView {
     Some(&self.project)
   }
 
-  fn set_loading(&mut self, loading: bool) {
-    self.loading = loading;
-  }
-
-  fn receive_data(&mut self, event: &JiraEvent) -> bool {
-    match event {
-      JiraEvent::IssuesLoaded(issues) => {
-        self.issues = issues.clone();
-        self.loading = false;
-        true
-      }
-      _ => false,
-    }
+  fn tick(&mut self) {
+    self.query.poll();
   }
 }

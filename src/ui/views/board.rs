@@ -1,5 +1,6 @@
-use crate::event::JiraEvent;
-use crate::jira::types::{BoardColumn, IssueSummary, QuickFilter};
+use crate::jira::client::JiraClient;
+use crate::jira::types::{BoardColumn, BoardConfiguration, IssueSummary, QuickFilter};
+use crate::query::{Query, QueryState};
 use crate::ui::components::{SearchInput, SearchResult};
 use crate::ui::renderfns::{status_color, truncate};
 use crate::ui::view::{Shortcut, View, ViewAction};
@@ -7,16 +8,21 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
+/// Combined board data fetched in parallel
+#[derive(Clone)]
+struct BoardData {
+  issues: Vec<IssueSummary>,
+  columns: Vec<BoardColumn>,
+  quick_filters: Vec<QuickFilter>,
+}
+
 /// View for displaying a single board with its issues
-#[derive(Debug)]
 pub struct BoardView {
   board_id: u64,
   board_name: String,
 
-  // Data
-  issues: Vec<IssueSummary>,
-  columns: Vec<BoardColumn>,
-  quick_filters: Vec<QuickFilter>,
+  // Data query
+  query: Query<BoardData>,
 
   // UI state
   list_state: ListState,    // Selection for list mode
@@ -25,34 +31,80 @@ pub struct BoardView {
   selected_filter: Option<usize>, // Index into quick_filters, None = "All"
   filter_bar_active: bool,        // Whether filter tabs are shown/navigable
   swimlane_mode: bool,
-  loading: bool,
 
   // Components
   search: SearchInput,
 }
 
 impl BoardView {
-  pub fn new(board_id: u64, board_name: String) -> Self {
+  pub fn new(board_id: u64, board_name: String, jira: JiraClient) -> Self {
+    let mut query = Query::new(move || {
+      let jira = jira.clone();
+      async move {
+        // Fetch all board data in parallel
+        let (issues_result, config_result, filters_result) = tokio::join!(
+          jira.get_board_issues(board_id),
+          jira.get_board_configuration(board_id),
+          jira.get_board_quick_filters(board_id),
+        );
+
+        let issues = issues_result.map_err(|e| e.to_string())?;
+        let config = config_result.unwrap_or_else(|_| BoardConfiguration {
+          columns: Vec::new(),
+        });
+        let quick_filters = filters_result.unwrap_or_default();
+
+        Ok(BoardData {
+          issues,
+          columns: config.columns,
+          quick_filters,
+        })
+      }
+    });
+
+    // Start fetching immediately
+    query.fetch();
+
     Self {
       board_id,
       board_name,
-      issues: Vec::new(),
-      columns: Vec::new(),
-      quick_filters: Vec::new(),
+      query,
       list_state: ListState::default(),
       swimlane_selected: 0,
       selected_column: 0,
       selected_filter: None,
       filter_bar_active: false,
       swimlane_mode: false,
-      loading: true,
       search: SearchInput::new(),
     }
   }
 
+  fn data(&self) -> Option<&BoardData> {
+    self.query.data()
+  }
+
+  fn issues(&self) -> &[IssueSummary] {
+    self.data().map(|d| d.issues.as_slice()).unwrap_or(&[])
+  }
+
+  fn columns(&self) -> &[BoardColumn] {
+    self.data().map(|d| d.columns.as_slice()).unwrap_or(&[])
+  }
+
+  fn quick_filters(&self) -> &[QuickFilter] {
+    self
+      .data()
+      .map(|d| d.quick_filters.as_slice())
+      .unwrap_or(&[])
+  }
+
+  fn is_loading(&self) -> bool {
+    self.query.is_loading()
+  }
+
   /// Get issues filtered by active quick filters and search
   fn filtered_issues(&self) -> Vec<&IssueSummary> {
-    self.issues.iter().collect()
+    self.issues().iter().collect()
   }
 
   /// Get issues for a specific column (by status)
@@ -66,10 +118,10 @@ impl BoardView {
 
   /// Render list mode
   fn render_list(&mut self, frame: &mut Frame, area: Rect) {
-    let title = if self.loading {
-      format!(" {} (loading...) ", self.board_name)
-    } else {
-      format!(" {} ({} issues) ", self.board_name, self.issues.len())
+    let title = match self.query.state() {
+      QueryState::Loading => format!(" {} (loading...) ", self.board_name),
+      QueryState::Error(e) => format!(" {} (error: {}) ", self.board_name, e),
+      _ => format!(" {} ({} issues) ", self.board_name, self.issues().len()),
     };
 
     let block = Block::default()
@@ -78,16 +130,22 @@ impl BoardView {
       .borders(Borders::ALL)
       .border_style(Style::default().fg(Color::Blue));
 
-    if self.issues.is_empty() && !self.loading {
-      let paragraph = Paragraph::new("No issues found on this board.")
+    if self.issues().is_empty() && !self.is_loading() {
+      let content = if self.query.is_error() {
+        "Failed to load board. Press 'r' to retry."
+      } else {
+        "No issues found on this board."
+      };
+      let paragraph = Paragraph::new(content)
         .block(block)
         .style(Style::default().fg(Color::DarkGray));
       frame.render_widget(paragraph, area);
       return;
     }
 
-    let filtered = self.filtered_issues();
-    let items: Vec<ListItem> = filtered
+    // Collect items to avoid borrow conflict
+    let items: Vec<ListItem> = self
+      .filtered_issues()
       .iter()
       .map(|issue| {
         let color = status_color(&issue.status);
@@ -123,7 +181,8 @@ impl BoardView {
 
   /// Render swimlane (kanban) mode
   fn render_swimlanes(&self, frame: &mut Frame, area: Rect) {
-    if self.columns.is_empty() {
+    let columns = self.columns();
+    if columns.is_empty() {
       let block = Block::default()
         .title(format!(" {} ", self.board_name))
         .title_alignment(Alignment::Center)
@@ -138,11 +197,11 @@ impl BoardView {
     }
 
     // Calculate column widths
-    let num_columns = self.columns.len();
+    let num_columns = columns.len();
     let col_width = area.width / num_columns as u16;
 
     // Render each column
-    for (col_idx, column) in self.columns.iter().enumerate() {
+    for (col_idx, column) in columns.iter().enumerate() {
       let issues = self.issues_for_column(column);
       let is_selected_column = col_idx == self.selected_column;
 
@@ -202,7 +261,8 @@ impl BoardView {
 
   /// Render quick filter tabs
   fn render_filters(&self, frame: &mut Frame, area: Rect) {
-    if self.quick_filters.is_empty() {
+    let quick_filters = self.quick_filters();
+    if quick_filters.is_empty() {
       return;
     }
 
@@ -218,7 +278,7 @@ impl BoardView {
     spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
 
     // Individual filter tabs
-    for (idx, filter) in self.quick_filters.iter().enumerate() {
+    for (idx, filter) in quick_filters.iter().enumerate() {
       let is_selected = self.selected_filter == Some(idx);
       let style = if is_selected {
         Style::default().fg(Color::Black).bg(Color::Cyan)
@@ -226,7 +286,7 @@ impl BoardView {
         Style::default().fg(Color::Gray)
       };
       spans.push(Span::styled(format!(" {} ", filter.name), style));
-      if idx < self.quick_filters.len() - 1 {
+      if idx < quick_filters.len() - 1 {
         spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
       }
     }
@@ -239,7 +299,7 @@ impl BoardView {
   /// Get the currently selected issue
   fn selected_issue(&self) -> Option<&IssueSummary> {
     if self.swimlane_mode {
-      if let Some(column) = self.columns.get(self.selected_column) {
+      if let Some(column) = self.columns().get(self.selected_column) {
         let issues = self.issues_for_column(column);
         issues.get(self.swimlane_selected).copied()
       } else {
@@ -266,7 +326,7 @@ impl BoardView {
   fn navigate_swimlane(&mut self, direction: i32, horizontal: bool) {
     if horizontal {
       // Move between columns
-      let num_columns = self.columns.len();
+      let num_columns = self.columns().len();
       if num_columns == 0 {
         return;
       }
@@ -283,7 +343,7 @@ impl BoardView {
       self.swimlane_selected = 0;
     } else {
       // Move within column
-      if let Some(column) = self.columns.get(self.selected_column) {
+      if let Some(column) = self.columns().get(self.selected_column) {
         let len = self.issues_for_column(column).len();
         if len == 0 {
           return;
@@ -300,12 +360,13 @@ impl BoardView {
 
   /// Navigate filter tabs (left/right)
   fn navigate_filter(&mut self, direction: i32) {
-    if self.quick_filters.is_empty() {
+    let quick_filters = self.quick_filters();
+    if quick_filters.is_empty() {
       return;
     }
 
     // Total tabs = "All" + quick_filters
-    let total_tabs = self.quick_filters.len() + 1;
+    let total_tabs = quick_filters.len() + 1;
 
     // Current position: None = 0 (All), Some(idx) = idx + 1
     let current_pos = self.selected_filter.map(|i| i + 1).unwrap_or(0);
@@ -362,12 +423,12 @@ impl View for BoardView {
 
       // Filter tab navigation (when filter bar active)
       KeyCode::Char('h') | KeyCode::Left => {
-        if self.filter_bar_active && !self.quick_filters.is_empty() {
+        if self.filter_bar_active && !self.quick_filters().is_empty() {
           self.navigate_filter(-1);
         }
       }
       KeyCode::Char('l') | KeyCode::Right => {
-        if self.filter_bar_active && !self.quick_filters.is_empty() {
+        if self.filter_bar_active && !self.quick_filters().is_empty() {
           self.navigate_filter(1);
         }
       }
@@ -386,7 +447,7 @@ impl View for BoardView {
 
       // Toggle filter bar
       KeyCode::Char('f') => {
-        if !self.quick_filters.is_empty() {
+        if !self.quick_filters().is_empty() {
           self.filter_bar_active = !self.filter_bar_active;
         }
       }
@@ -399,10 +460,15 @@ impl View for BoardView {
         self.selected_column = 0;
       }
 
+      // Refresh
+      KeyCode::Char('r') => {
+        self.query.refetch();
+      }
+
       // Open issue detail
       KeyCode::Enter => {
         if let Some(issue) = self.selected_issue() {
-          return ViewAction::LoadIssue {
+          return ViewAction::PushIssueDetail {
             key: issue.key.clone(),
           };
         }
@@ -418,7 +484,7 @@ impl View for BoardView {
 
   fn render(&mut self, frame: &mut Frame, area: Rect) {
     // Split area for filters (if active) and main content
-    let show_filters = self.filter_bar_active && !self.quick_filters.is_empty();
+    let show_filters = self.filter_bar_active && !self.quick_filters().is_empty();
     let (filter_area, content_area) = if show_filters {
       let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -453,43 +519,20 @@ impl View for BoardView {
     }
   }
 
-  fn set_loading(&mut self, loading: bool) {
-    self.loading = loading;
-  }
-
-  fn receive_data(&mut self, event: &JiraEvent) -> bool {
-    match event {
-      JiraEvent::BoardDataLoaded {
-        board_id,
-        board_name,
-        issues,
-        config,
-        filters,
-      } => {
-        if *board_id == self.board_id {
-          self.board_name = board_name.clone();
-          self.issues = issues.clone();
-          self.columns = config.columns.clone();
-          self.quick_filters = filters.clone();
-          self.loading = false;
-          true
-        } else {
-          false
-        }
-      }
-      _ => false,
-    }
+  fn tick(&mut self) {
+    self.query.poll();
   }
 
   fn shortcuts(&self) -> Vec<Shortcut> {
     let mut shortcuts = vec![
       Shortcut::new(":", "command"),
       Shortcut::new("/", "search"),
+      Shortcut::new("r", "refresh"),
       Shortcut::new("q", "back"),
     ];
 
     // Filter shortcuts
-    if !self.quick_filters.is_empty() {
+    if !self.quick_filters().is_empty() {
       shortcuts.push(Shortcut::new("f", "filters"));
       if self.filter_bar_active {
         shortcuts.push(Shortcut::new("h/l", "filter tab"));
@@ -497,7 +540,7 @@ impl View for BoardView {
     }
 
     // Swimlane shortcuts
-    if !self.columns.is_empty() {
+    if !self.columns().is_empty() {
       shortcuts.push(Shortcut::new("s", "swimlane"));
       if self.swimlane_mode {
         shortcuts.push(Shortcut::new("PgUp/Dn", "column"));

@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::event::{Event, EventHandler, JiraEvent};
+use crate::event::{Event, EventHandler};
 use crate::jira::client::JiraClient;
 use crate::ui;
 use crate::ui::components::{CommandInput, CommandResult};
@@ -14,7 +14,6 @@ use crossterm::ExecutableCommand;
 use ratatui::prelude::*;
 use std::io::stdout;
 use std::time::Duration;
-use tokio::sync::mpsc;
 
 /// Main application state
 pub struct App {
@@ -30,9 +29,6 @@ pub struct App {
   /// Jira client
   jira: JiraClient,
 
-  /// Event sender for async tasks
-  event_tx: mpsc::UnboundedSender<Event>,
-
   /// Whether to quit
   should_quit: bool,
 }
@@ -40,16 +36,14 @@ pub struct App {
 impl App {
   pub async fn new(config: Config) -> Result<Self> {
     let jira = JiraClient::new(&config)?;
-    let (tx, _rx) = mpsc::unbounded_channel();
 
     let default_project = config.default_project.clone().unwrap_or_default();
 
     Ok(Self {
-      view_stack: vec![Box::new(IssueListView::new(default_project))],
+      view_stack: vec![Box::new(IssueListView::new(default_project, jira.clone()))],
       command: CommandInput::new(),
       config,
       jira,
-      event_tx: tx,
       should_quit: false,
     })
   }
@@ -62,10 +56,6 @@ impl App {
 
     // Create event handler
     let mut events = EventHandler::new(Duration::from_millis(250));
-    self.event_tx = events.sender();
-
-    // Initial data load
-    self.load_initial_data();
 
     // Main loop
     while !self.should_quit {
@@ -85,44 +75,19 @@ impl App {
     Ok(())
   }
 
-  fn load_initial_data(&self) {
-    // Get project from current view if it's an issue list
-    let project = self
-      .view_stack
-      .first()
-      .and_then(|v| v.project())
-      .unwrap_or("")
-      .to_string();
-
-    if !project.is_empty() {
-      let jira = self.jira.clone();
-      let tx = self.event_tx.clone();
-
-      tokio::spawn(async move {
-        let _ = tx.send(Event::Jira(JiraEvent::Loading));
-        match jira.search_issues(&format!("project = {}", project)).await {
-          Ok(issues) => {
-            let _ = tx.send(Event::Jira(JiraEvent::IssuesLoaded(issues)));
-          }
-          Err(e) => {
-            let _ = tx.send(Event::Error(e.to_string()));
-          }
-        }
-      });
-    }
-  }
-
   fn handle_event(&mut self, event: Event) -> Result<()> {
     match event {
       Event::Key(key) => self.handle_key(key),
-      Event::Tick => {} // UI refresh happens automatically
-      Event::Jira(jira_event) => self.handle_jira_event(jira_event),
-      Event::Error(msg) => {
-        // TODO: Display error in status bar
-        eprintln!("Error: {}", msg);
-      }
+      Event::Tick => self.handle_tick(),
     }
     Ok(())
+  }
+
+  fn handle_tick(&mut self) {
+    // Let all views poll their queries
+    for view in &mut self.view_stack {
+      view.tick();
+    }
   }
 
   fn handle_key(&mut self, key: KeyEvent) {
@@ -146,8 +111,12 @@ impl App {
     // Delegate to current view
     if let Some(view) = self.view_stack.last_mut() {
       match view.handle_key(key) {
-        ViewAction::LoadIssue { key } => self.load_issue(&key),
-        ViewAction::LoadBoard { id, name } => self.load_board(id, &name),
+        ViewAction::PushIssueDetail { key } => {
+          self.push_issue_detail(&key);
+        }
+        ViewAction::PushBoard { id, name } => {
+          self.push_board(id, &name);
+        }
         ViewAction::Pop => {
           if self.view_stack.len() > 1 {
             self.view_stack.pop();
@@ -163,71 +132,29 @@ impl App {
     }
   }
 
-  fn load_issue(&self, key: &str) {
-    let jira = self.jira.clone();
-    let key = key.to_string();
-    let tx = self.event_tx.clone();
-
-    tokio::spawn(async move {
-      let _ = tx.send(Event::Jira(JiraEvent::Loading));
-      match jira.get_issue(&key).await {
-        Ok(issue) => {
-          let _ = tx.send(Event::Jira(JiraEvent::IssueLoaded(Box::new(issue))));
-        }
-        Err(e) => {
-          let _ = tx.send(Event::Error(e.to_string()));
-        }
-      }
-    });
+  fn push_issue_detail(&mut self, key: &str) {
+    self.view_stack.push(Box::new(IssueDetailView::new(
+      key.to_string(),
+      self.jira.clone(),
+    )));
   }
 
-  fn load_board(&mut self, id: u64, name: &str) {
-    // Push BoardView immediately, it will receive data when ready
-    self
-      .view_stack
-      .push(Box::new(BoardView::new(id, name.to_string())));
-
-    let jira = self.jira.clone();
-    let tx = self.event_tx.clone();
-    let board_id = id;
-    let board_name = name.to_string();
-
-    tokio::spawn(async move {
-      let _ = tx.send(Event::Jira(JiraEvent::Loading));
-
-      // Fetch all board data in parallel
-      let (issues_result, config_result, filters_result) = tokio::join!(
-        jira.get_board_issues(board_id),
-        jira.get_board_configuration(board_id),
-        jira.get_board_quick_filters(board_id),
-      );
-
-      let issues = issues_result.unwrap_or_default();
-      let config = config_result.unwrap_or_else(|_| crate::jira::types::BoardConfiguration {
-        columns: Vec::new(),
-      });
-      let filters = filters_result.unwrap_or_default();
-
-      let _ = tx.send(Event::Jira(JiraEvent::BoardDataLoaded {
-        board_id,
-        board_name,
-        issues,
-        config,
-        filters,
-      }));
-    });
+  fn push_board(&mut self, id: u64, name: &str) {
+    self.view_stack.push(Box::new(BoardView::new(
+      id,
+      name.to_string(),
+      self.jira.clone(),
+    )));
   }
 
   fn execute_command(&mut self, cmd: &str) {
     match cmd {
       "issues" => {
         let project = self.config.default_project.clone().unwrap_or_default();
-        self.view_stack = vec![Box::new(IssueListView::new(project))];
-        self.load_initial_data();
+        self.view_stack = vec![Box::new(IssueListView::new(project, self.jira.clone()))];
       }
       "boards" => {
-        self.view_stack = vec![Box::new(BoardListView::new())];
-        self.load_boards();
+        self.view_stack = vec![Box::new(BoardListView::new(self.jira.clone()))];
       }
       "epics" => {
         // TODO: Implement epics view
@@ -244,61 +171,7 @@ impl App {
     }
   }
 
-  fn load_boards(&self) {
-    let jira = self.jira.clone();
-    let tx = self.event_tx.clone();
-
-    tokio::spawn(async move {
-      let _ = tx.send(Event::Jira(JiraEvent::Loading));
-      match jira.get_boards().await {
-        Ok(boards) => {
-          let _ = tx.send(Event::Jira(JiraEvent::BoardsLoaded(boards)));
-        }
-        Err(e) => {
-          let _ = tx.send(Event::Error(e.to_string()));
-        }
-      }
-    });
-  }
-
-  fn handle_jira_event(&mut self, event: JiraEvent) {
-    match &event {
-      JiraEvent::IssueLoaded(issue) => {
-        // Push detail view - this is a special case handled by App
-        self
-          .view_stack
-          .push(Box::new(IssueDetailView::new(issue.as_ref().clone())));
-        return;
-      }
-      JiraEvent::Loading => {
-        // Set loading on current view
-        if let Some(view) = self.view_stack.last_mut() {
-          view.set_loading(true);
-        }
-        return;
-      }
-      _ => {}
-    }
-
-    // Let views handle other events
-    // Try the top view first, then root view
-    if let Some(view) = self.view_stack.last_mut() {
-      if view.receive_data(&event) {
-        return;
-      }
-    }
-    if self.view_stack.len() > 1 {
-      if let Some(view) = self.view_stack.first_mut() {
-        view.receive_data(&event);
-      }
-    }
-  }
-
   // Accessors for UI rendering
-  pub fn current_view(&self) -> Option<&dyn View> {
-    self.view_stack.last().map(|v| v.as_ref())
-  }
-
   pub fn current_view_mut(&mut self) -> Option<&mut dyn View> {
     match self.view_stack.last_mut() {
       Some(v) => Some(&mut **v),

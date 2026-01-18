@@ -1,4 +1,3 @@
-use crate::event::JiraEvent;
 use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 
@@ -20,10 +19,10 @@ impl Shortcut {
 pub enum ViewAction {
   /// No action needed
   None,
-  /// Load full issue details
-  LoadIssue { key: String },
-  /// Load board details
-  LoadBoard { id: u64, name: String },
+  /// Load full issue details and push detail view
+  PushIssueDetail { key: String },
+  /// Load board details and push board view
+  PushBoard { id: u64, name: String },
   /// Pop current view from stack (go back)
   Pop,
   /// Quit the application
@@ -35,6 +34,9 @@ pub enum ViewAction {
 /// Views handle their own input modes (search, edit, etc.) and return
 /// actions for the App to execute. This creates a clean delegation chain:
 /// App → View → Components
+///
+/// Views that load data asynchronously should use Query<T> internally and
+/// poll it in the tick() method.
 pub trait View {
   /// Handle a key event, returning an action for App to execute
   fn handle_key(&mut self, key: KeyEvent) -> ViewAction;
@@ -50,15 +52,8 @@ pub trait View {
     None
   }
 
-  /// Set the loading state
-  fn set_loading(&mut self, loading: bool);
-
-  /// Receive data from async operations
-  /// Returns true if the event was handled by this view
-  fn receive_data(&mut self, event: &JiraEvent) -> bool {
-    let _ = event;
-    false
-  }
+  /// Called on each tick to allow views to poll async queries
+  fn tick(&mut self) {}
 
   /// Get keyboard shortcuts to display in the header
   /// Override this to provide view-specific shortcuts
