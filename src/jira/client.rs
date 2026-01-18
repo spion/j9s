@@ -265,8 +265,6 @@ impl JiraClient {
                 statuses
                   .iter()
                   .filter_map(|s| {
-                    info!("Parsing status: {:?}", s);
-                    // TODO: check if server (not just cloud) has status ID
                     s.get("self")
                       .and_then(|_| s.get("id"))
                       .and_then(|v| v.as_str())
