@@ -4,6 +4,7 @@ use crate::jira::types::{
 };
 use color_eyre::{eyre::eyre, Result};
 use serde_json::Value;
+use tracing::info;
 
 /// Jira API client wrapper
 #[derive(Clone)]
@@ -49,6 +50,12 @@ impl JiraClient {
             .and_then(|v| v.get("name"))
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown")
+            .to_string(),
+          status_id: fields
+            .get("status")
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+            .expect("Status ID should be present")
             .to_string(),
           issue_type: fields
             .get("issuetype")
@@ -97,6 +104,12 @@ impl JiraClient {
         .and_then(|v| v.get("name"))
         .and_then(|v| v.as_str())
         .unwrap_or("Unknown")
+        .to_string(),
+      status_id: fields
+        .get("status")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("Status ID should be present")
         .to_string(),
       issue_type: fields
         .get("issuetype")
@@ -196,6 +209,12 @@ impl JiraClient {
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unknown")
                 .to_string(),
+              status_id: fields
+                .get("status")
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .expect("Status ID should be present")
+                .to_string(),
               issue_type: fields
                 .get("issuetype")
                 .and_then(|v| v.get("name"))
@@ -246,12 +265,12 @@ impl JiraClient {
                 statuses
                   .iter()
                   .filter_map(|s| {
-                    // Try both "name" (Cloud) and direct string (Server)
+                    info!("Parsing status: {:?}", s);
+                    // TODO: check if server (not just cloud) has status ID
                     s.get("self")
-                      .and_then(|_| s.get("name"))
+                      .and_then(|_| s.get("id"))
                       .and_then(|v| v.as_str())
-                      .or_else(|| s.as_str())
-                      .map(|s| s.to_string())
+                      .and_then(|v| Some(v.to_string()))
                   })
                   .collect()
               })

@@ -4,6 +4,7 @@ pub struct IssueSummary {
   pub key: String,
   pub summary: String,
   pub status: String,
+  pub status_id: String,
   pub issue_type: String,
   pub assignee: Option<String>,
   pub priority: Option<String>,
@@ -16,6 +17,7 @@ pub struct Issue {
   pub summary: String,
   pub description: Option<String>,
   pub status: String,
+  pub status_id: String,
   pub issue_type: String,
   pub assignee: Option<String>,
   pub reporter: Option<String>,
@@ -46,7 +48,7 @@ pub struct Epic {
 #[derive(Debug, Clone)]
 pub struct BoardColumn {
   pub name: String,
-  pub statuses: Vec<String>, // Status names that map to this column
+  pub statuses: Vec<String>, // Status ids that map to this column
 }
 
 /// Board configuration with columns

@@ -8,6 +8,7 @@ use crate::ui::view::{Shortcut, View, ViewAction};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use tracing::info;
 
 /// Combined board data fetched in parallel
 #[derive(Clone)]
@@ -110,10 +111,15 @@ impl BoardView {
 
   /// Get issues for a specific column (by status)
   fn issues_for_column(&self, column: &BoardColumn) -> Vec<&IssueSummary> {
+    // info!("Filtering issues for column: {:?}", column.statuses);
+
     self
       .filtered_issues()
       .into_iter()
-      .filter(|issue| column.statuses.contains(&issue.status))
+      .filter(|issue| {
+        info!("Checking issue {:?}", issue);
+        column.statuses.contains(&issue.status_id)
+      })
       .collect()
   }
 
@@ -200,25 +206,18 @@ impl BoardView {
       return;
     }
 
-    // Calculate column widths
-    let num_columns = columns.len();
-    let col_width = area.width / num_columns as u16;
+    // Use Layout to distribute columns evenly
+    let constraints: Vec<Constraint> = columns
+      .iter()
+      .map(|_| Constraint::Ratio(1, columns.len() as u32))
+      .collect();
+    let col_areas = Layout::horizontal(constraints).split(area);
 
     // Render each column
     for (col_idx, column) in columns.iter().enumerate() {
       let issues = self.issues_for_column(column);
       let is_selected_column = col_idx == self.selected_column;
-
-      let col_area = Rect {
-        x: area.x + (col_idx as u16 * col_width),
-        y: area.y,
-        width: if col_idx == num_columns - 1 {
-          area.width - (col_idx as u16 * col_width)
-        } else {
-          col_width
-        },
-        height: area.height,
-      };
+      let col_area = col_areas[col_idx];
 
       let border_color = if is_selected_column {
         Color::Yellow
@@ -237,7 +236,8 @@ impl BoardView {
         .iter()
         .map(|issue| {
           let line = Line::from(vec![Span::styled(
-            truncate(&issue.key, col_width.saturating_sub(4) as usize),
+            // truncate(&issue.key, col_area.width.saturating_sub(4) as usize),
+            &issue.key,
             Style::default().fg(Color::Cyan),
           )]);
           ListItem::new(line)
