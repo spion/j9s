@@ -76,8 +76,12 @@ pub struct ApiIssue {
 pub struct ApiBoardIssuesResponse {
   #[serde(default)]
   pub issues: Vec<ApiIssue>,
-  #[serde(rename = "isLast", default = "default_true")]
-  pub is_last: bool,
+  #[serde(rename = "startAt", default)]
+  pub start_at: u64,
+  #[serde(rename = "maxResults", default)]
+  pub max_results: u64,
+  #[serde(default)]
+  pub total: u64,
 }
 
 // ============================================================================

@@ -122,16 +122,17 @@ impl JiraClient {
         .await
         .map_err(|e| eyre!("Failed to get board issues: {}", e))?;
 
+      let issues_count = response.issues.len() as u64;
       let issues: Vec<IssueSummary> = response
         .issues
         .into_iter()
         .map(|issue| issue.into_summary())
         .collect();
 
-      let is_last = response.is_last;
       all_issues.extend(issues);
 
-      if is_last {
+      // Check if we've fetched all issues
+      if start_at + issues_count >= response.total {
         break;
       }
       start_at += max_results;
