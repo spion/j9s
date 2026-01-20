@@ -40,7 +40,16 @@ impl JiraClient {
     use futures::{StreamExt, TryStreamExt};
 
     let search = self.client.search();
-    let options = gouqi::SearchOptions::default();
+    let options = gouqi::SearchOptions::builder()
+      .fields(vec![
+        "summary",
+        "status",
+        "issuetype",
+        "assignee",
+        "priority",
+      ])
+      .max_results(100)
+      .build();
 
     let stream = search
       .stream(jql, &options)
@@ -118,12 +127,14 @@ impl JiraClient {
   pub async fn get_board_issues(&self, board_id: u64) -> Result<Vec<IssueSummary>> {
     let mut all_issues = Vec::new();
     let mut start_at = 0u64;
-    let max_results = 50u64;
+    let max_results = 100u64;
+
+    let fields = "summary,status,issuetype,assignee,priority";
 
     loop {
       let endpoint = format!(
-        "/board/{}/issue?startAt={}&maxResults={}",
-        board_id, start_at, max_results
+        "/board/{}/issue?startAt={}&maxResults={}&fields={}",
+        board_id, start_at, max_results, fields
       );
 
       let response: ApiBoardIssuesResponse = self
