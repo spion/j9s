@@ -24,7 +24,10 @@ impl IssueListView {
     let jql = if project.is_empty() {
       String::new()
     } else {
-      format!("project = {} ORDER BY updated DESC", project)
+      format!(
+        "project = {} AND resolution = unresolved ORDER BY updated DESC",
+        project
+      )
     };
 
     let mut query = if jql.is_empty() {

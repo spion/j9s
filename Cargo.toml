@@ -15,26 +15,21 @@ crossterm = "0.28"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 
-# Jira API
 gouqi = { version = "0.20", features = ["async"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "gzip", "deflate"] }
+url = "2"
 
-# Database
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-# Config & CLI
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
+serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 dirs = "5"
 
-# Error handling
 color-eyre = "0.6"
 
-# Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 
-# JSON
-serde_json = "1"

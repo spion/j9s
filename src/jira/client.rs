@@ -6,6 +6,7 @@ use crate::jira::api_types::{
 use crate::jira::types::{Board, BoardConfiguration, Issue, IssueSummary, QuickFilter};
 use color_eyre::{eyre::eyre, Result};
 use serde_json::Value;
+use url::form_urlencoded;
 
 /// Jira API client wrapper
 #[derive(Clone)]
@@ -124,7 +125,7 @@ impl JiraClient {
   }
 
   /// Get issues for a specific board
-  pub async fn get_board_issues(&self, board_id: u64) -> Result<Vec<IssueSummary>> {
+  pub async fn get_board_issues(&self, board_id: u64, jql: Option<&str>) -> Result<Vec<IssueSummary>> {
     let mut all_issues = Vec::new();
     let mut start_at = 0u64;
     let max_results = 100u64;
@@ -132,10 +133,15 @@ impl JiraClient {
     let fields = "summary,status,issuetype,assignee,priority";
 
     loop {
-      let endpoint = format!(
+      let mut endpoint = format!(
         "/board/{}/issue?startAt={}&maxResults={}&fields={}",
         board_id, start_at, max_results, fields
       );
+
+      if let Some(jql) = jql {
+        let encoded: String = form_urlencoded::byte_serialize(jql.as_bytes()).collect();
+        endpoint.push_str(&format!("&jql={}", encoded));
+      }
 
       let response: ApiBoardIssuesResponse = self
         .client

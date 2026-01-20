@@ -55,8 +55,10 @@ impl BoardView {
       let jira = jira_for_query.clone();
       async move {
         // Fetch all board data in parallel
+        // Filter: unresolved issues + resolved in past 2 weeks
+        let jql = "resolution IS EMPTY OR resolved >= -2w";
         let (issues_result, config_result, filters_result) = tokio::join!(
-          jira.get_board_issues(board_id),
+          jira.get_board_issues(board_id, Some(jql)),
           jira.get_board_configuration(board_id),
           jira.get_board_quick_filters(board_id),
         );
