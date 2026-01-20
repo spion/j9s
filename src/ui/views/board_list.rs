@@ -18,11 +18,17 @@ pub struct BoardListView {
 }
 
 impl BoardListView {
-  pub fn new(jira: JiraClient) -> Self {
+  pub fn new(project: Option<String>, jira: JiraClient) -> Self {
     let jira_for_query = jira.clone();
     let mut query = Query::new(move || {
       let jira = jira_for_query.clone();
-      async move { jira.get_boards().await.map_err(|e| e.to_string()) }
+      let project = project.clone();
+      async move {
+        jira
+          .get_boards(project.as_deref())
+          .await
+          .map_err(|e| e.to_string())
+      }
     });
 
     // Start fetching immediately

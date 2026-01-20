@@ -13,6 +13,7 @@ crossterm = "0.28"
 
 # Async
 tokio = { version = "1", features = ["full"] }
+futures = "0.3"
 
 # Jira API
 gouqi = { version = "0.20", features = ["async"] }

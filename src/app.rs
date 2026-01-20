@@ -131,7 +131,8 @@ impl App {
         self.view_stack = vec![Box::new(IssueListView::new(project, self.jira.clone()))];
       }
       "boards" => {
-        self.view_stack = vec![Box::new(BoardListView::new(self.jira.clone()))];
+        let project = self.config.default_project.clone();
+        self.view_stack = vec![Box::new(BoardListView::new(project, self.jira.clone()))];
       }
       "epics" => {
         // TODO: Implement epics view

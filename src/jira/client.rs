@@ -25,16 +25,17 @@ impl JiraClient {
 
   /// Search for issues using JQL
   pub async fn search_issues(&self, jql: &str) -> Result<Vec<IssueSummary>> {
-    let search = self.client.search();
+    use futures::StreamExt;
 
-    let results = search
-      .list(jql, &Default::default())
+    let search = self.client.search();
+    let options = gouqi::SearchOptions::default();
+
+    let stream = search
+      .stream(jql, &options)
       .await
       .map_err(|e| eyre!("Failed to search issues: {}", e))?;
 
-    let issues = results
-      .issues
-      .into_iter()
+    let issues: Vec<IssueSummary> = stream
       .map(|issue| {
         let fields = issue.fields;
         IssueSummary {
@@ -74,7 +75,8 @@ impl JiraClient {
             .map(|s| s.to_string()),
         }
       })
-      .collect();
+      .collect()
+      .await;
 
     Ok(issues)
   }
@@ -154,89 +156,115 @@ impl JiraClient {
     })
   }
 
-  /// Get all boards
-  pub async fn get_boards(&self) -> Result<Vec<Board>> {
-    let boards_api = self.client.boards();
+  /// Get all boards, optionally filtered by project
+  pub async fn get_boards(&self, project: Option<&str>) -> Result<Vec<Board>> {
+    use futures::StreamExt;
 
-    let results = boards_api
-      .list(&Default::default())
+    let boards_api = self.client.boards();
+    let options = match project {
+      Some(p) => gouqi::SearchOptions::builder().project_key_or_id(p).build(),
+      None => gouqi::SearchOptions::default(),
+    };
+
+    let stream = boards_api
+      .stream(&options)
       .await
       .map_err(|e| eyre!("Failed to get boards: {}", e))?;
 
-    let boards = results
-      .values
-      .into_iter()
+    let boards: Vec<Board> = stream
+      .filter_map(|result| async move { result.ok() })
       .map(|board| Board {
         id: board.id,
         name: board.name,
         board_type: board.type_name,
       })
-      .collect();
+      .collect()
+      .await;
 
     Ok(boards)
   }
 
   /// Get issues for a specific board
   pub async fn get_board_issues(&self, board_id: u64) -> Result<Vec<IssueSummary>> {
-    let endpoint = format!("/board/{}/issue", board_id);
-    let response: Value = self
-      .client
-      .get("agile", &endpoint)
-      .await
-      .map_err(|e| eyre!("Failed to get board issues: {}", e))?;
+    let mut all_issues = Vec::new();
+    let mut start_at = 0u64;
+    let max_results = 50u64;
 
-    let issues = response
-      .get("issues")
-      .and_then(|v| v.as_array())
-      .map(|arr| {
-        arr
-          .iter()
-          .filter_map(|issue| {
-            let key = issue.get("key")?.as_str()?.to_string();
-            let fields = issue.get("fields")?;
+    loop {
+      let endpoint = format!(
+        "/board/{}/issue?startAt={}&maxResults={}",
+        board_id, start_at, max_results
+      );
+      let response: Value = self
+        .client
+        .get("agile", &endpoint)
+        .await
+        .map_err(|e| eyre!("Failed to get board issues: {}", e))?;
 
-            Some(IssueSummary {
-              key,
-              summary: fields
-                .get("summary")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-              status: fields
-                .get("status")
-                .and_then(|v| v.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown")
-                .to_string(),
-              status_id: fields
-                .get("status")
-                .and_then(|v| v.get("id"))
-                .and_then(|v| v.as_str())
-                .expect("Status ID should be present")
-                .to_string(),
-              issue_type: fields
-                .get("issuetype")
-                .and_then(|v| v.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-              assignee: fields
-                .get("assignee")
-                .and_then(|v| v.get("displayName"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-              priority: fields
-                .get("priority")
-                .and_then(|v| v.get("name"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
+      let issues: Vec<IssueSummary> = response
+        .get("issues")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+          arr
+            .iter()
+            .filter_map(|issue| {
+              let key = issue.get("key")?.as_str()?.to_string();
+              let fields = issue.get("fields")?;
+
+              Some(IssueSummary {
+                key,
+                summary: fields
+                  .get("summary")
+                  .and_then(|v| v.as_str())
+                  .unwrap_or("")
+                  .to_string(),
+                status: fields
+                  .get("status")
+                  .and_then(|v| v.get("name"))
+                  .and_then(|v| v.as_str())
+                  .unwrap_or("Unknown")
+                  .to_string(),
+                status_id: fields
+                  .get("status")
+                  .and_then(|v| v.get("id"))
+                  .and_then(|v| v.as_str())
+                  .expect("Status ID should be present")
+                  .to_string(),
+                issue_type: fields
+                  .get("issuetype")
+                  .and_then(|v| v.get("name"))
+                  .and_then(|v| v.as_str())
+                  .unwrap_or("")
+                  .to_string(),
+                assignee: fields
+                  .get("assignee")
+                  .and_then(|v| v.get("displayName"))
+                  .and_then(|v| v.as_str())
+                  .map(|s| s.to_string()),
+                priority: fields
+                  .get("priority")
+                  .and_then(|v| v.get("name"))
+                  .and_then(|v| v.as_str())
+                  .map(|s| s.to_string()),
+              })
             })
-          })
-          .collect()
-      })
-      .unwrap_or_default();
+            .collect()
+        })
+        .unwrap_or_default();
 
-    Ok(issues)
+      all_issues.extend(issues);
+
+      let is_last = response
+        .get("isLast")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+      if is_last {
+        break;
+      }
+      start_at += max_results;
+    }
+
+    Ok(all_issues)
   }
 
   /// Get board configuration (columns)
@@ -330,35 +358,55 @@ impl JiraClient {
 
   /// Get quick filters for a board
   pub async fn get_board_quick_filters(&self, board_id: u64) -> Result<Vec<QuickFilter>> {
-    let endpoint = format!("/board/{}/quickfilter", board_id);
-    let response: Value = self
-      .client
-      .get("agile", &endpoint)
-      .await
-      .map_err(|e| eyre!("Failed to get board quick filters: {}", e))?;
+    let mut all_filters = Vec::new();
+    let mut start_at = 0u64;
+    let max_results = 50u64;
 
-    let filters = response
-      .get("values")
-      .and_then(|v| v.as_array())
-      .map(|arr| {
-        arr
-          .iter()
-          .filter_map(|f| {
-            let id = f.get("id")?.as_u64()?;
-            let name = f.get("name")?.as_str()?.to_string();
-            let jql = f
-              .get("jql")
-              .and_then(|v| v.as_str())
-              .unwrap_or("")
-              .to_string();
+    loop {
+      let endpoint = format!(
+        "/board/{}/quickfilter?startAt={}&maxResults={}",
+        board_id, start_at, max_results
+      );
+      let response: Value = self
+        .client
+        .get("agile", &endpoint)
+        .await
+        .map_err(|e| eyre!("Failed to get board quick filters: {}", e))?;
 
-            Some(QuickFilter { id, name, jql })
-          })
-          .collect()
-      })
-      .unwrap_or_default();
+      let filters: Vec<QuickFilter> = response
+        .get("values")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+          arr
+            .iter()
+            .filter_map(|f| {
+              let id = f.get("id")?.as_u64()?;
+              let name = f.get("name")?.as_str()?.to_string();
+              let jql = f
+                .get("jql")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
-    Ok(filters)
+              Some(QuickFilter { id, name, jql })
+            })
+            .collect()
+        })
+        .unwrap_or_default();
+
+      all_filters.extend(filters);
+
+      let is_last = response
+        .get("isLast")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+      if is_last {
+        break;
+      }
+      start_at += max_results;
+    }
+
+    Ok(all_filters)
   }
 }
 
