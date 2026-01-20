@@ -19,7 +19,17 @@ impl JiraClient {
 
     let credentials = gouqi::Credentials::Basic(config.jira.email.clone(), token);
 
-    let client = gouqi::r#async::Jira::new(&config.jira.url, credentials)
+    // Create optimized HTTP client:
+    // - tcp_nodelay: disable Nagle's algorithm for lower latency
+    // - pool_max_idle_per_host: better connection reuse
+    // - rustls-tls-native-roots: use system CA certificates
+    let http_client = reqwest::Client::builder()
+      .tcp_nodelay(true)
+      .pool_max_idle_per_host(10)
+      .build()
+      .map_err(|e| eyre!("Failed to create HTTP client: {}", e))?;
+
+    let client = gouqi::r#async::Jira::from_client(&config.jira.url, credentials, http_client)
       .map_err(|e| eyre!("Failed to create Jira client: {}", e))?;
 
     Ok(Self { client })
