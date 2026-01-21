@@ -681,8 +681,21 @@ impl View for BoardView {
       // Refresh
       KeyCode::Char('r') => {
         self.query.refetch();
-        // Update filter values after refetch completes (will happen in tick)
       }
+
+      // Open issue detail
+      KeyCode::Enter => {
+        if let Some(issue) = self.selected_issue() {
+          return ViewAction::Push(Box::new(IssueDetailView::new(
+            issue.key.clone(),
+            self.jira.clone(),
+          )));
+        }
+      }
+
+      // Back
+      KeyCode::Char('q') | KeyCode::Esc => return ViewAction::Pop,
+
       _ => {}
     }
 
@@ -729,19 +742,6 @@ impl View for BoardView {
         KeyCode::Char('k') | KeyCode::Up => {
           self.navigate_list(-1);
         }
-
-        // Open issue detail
-        KeyCode::Enter => {
-          if let Some(issue) = self.selected_issue() {
-            return ViewAction::Push(Box::new(IssueDetailView::new(
-              issue.key.clone(),
-              self.jira.clone(),
-            )));
-          }
-        }
-
-        // Back
-        KeyCode::Char('q') | KeyCode::Esc => return ViewAction::Pop,
 
         _ => {}
       }
