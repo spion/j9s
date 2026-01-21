@@ -59,6 +59,9 @@ pub struct ApiIssueFields {
   pub updated: String,
   // Description is complex (can be string or ADF), handled separately
   pub description: Option<serde_json::Value>,
+  // Catch-all for custom fields (like epic)
+  #[serde(flatten)]
+  pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,26 +118,6 @@ pub struct ApiBoardConfigResponse {
 }
 
 // ============================================================================
-// Quick filters endpoint response
-// ============================================================================
-
-#[derive(Debug, Deserialize)]
-pub struct ApiQuickFilter {
-  pub id: u64,
-  pub name: String,
-  #[serde(default)]
-  pub jql: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ApiQuickFiltersResponse {
-  #[serde(default)]
-  pub values: Vec<ApiQuickFilter>,
-  #[serde(rename = "isLast", default = "default_true")]
-  pub is_last: bool,
-}
-
-// ============================================================================
 // Transitions endpoint response
 // ============================================================================
 
@@ -159,11 +142,16 @@ pub struct ApiTransitionsResponse {
 // Conversions to domain types
 // ============================================================================
 
-use super::types::{BoardColumn, BoardConfiguration, Issue, IssueSummary, QuickFilter, StatusInfo};
+use super::types::{BoardColumn, BoardConfiguration, Issue, IssueSummary, StatusInfo};
 
 impl ApiIssue {
   pub fn into_summary(self) -> IssueSummary {
+    self.into_summary_with_epic(None)
+  }
+
+  pub fn into_summary_with_epic(self, epic_field: Option<&str>) -> IssueSummary {
     let f = self.fields;
+    let epic = epic_field.and_then(|field_name| extract_epic_value(f.extra.get(field_name)));
     IssueSummary {
       key: self.key,
       summary: f.summary,
@@ -176,6 +164,7 @@ impl ApiIssue {
       issue_type: f.issue_type.map(|t| t.name).unwrap_or_default(),
       assignee: f.assignee.map(|u| u.display_name),
       priority: f.priority.map(|p| p.name),
+      epic,
     }
   }
 
@@ -198,16 +187,6 @@ impl ApiIssue {
       labels: f.labels,
       created: f.created,
       updated: f.updated,
-    }
-  }
-}
-
-impl From<ApiQuickFilter> for QuickFilter {
-  fn from(f: ApiQuickFilter) -> Self {
-    QuickFilter {
-      id: f.id,
-      name: f.name,
-      jql: f.jql,
     }
   }
 }
@@ -247,8 +226,32 @@ impl From<ApiBoardConfigResponse> for BoardConfiguration {
 // Helpers
 // ============================================================================
 
-fn default_true() -> bool {
-  true
+/// Extract epic value from a custom field
+/// Epic fields can be:
+/// - A string (epic key like "PROJ-123")
+/// - An object with "key" or "name" field
+/// - null
+fn extract_epic_value(value: Option<&serde_json::Value>) -> Option<String> {
+  let value = value?;
+
+  // If it's a string, return it directly
+  if let Some(s) = value.as_str() {
+    return Some(s.to_string());
+  }
+
+  // If it's an object, try to get key or name
+  if let Some(obj) = value.as_object() {
+    // Try "key" first (standard epic link format)
+    if let Some(key) = obj.get("key").and_then(|v| v.as_str()) {
+      return Some(key.to_string());
+    }
+    // Try "name" as fallback
+    if let Some(name) = obj.get("name").and_then(|v| v.as_str()) {
+      return Some(name.to_string());
+    }
+  }
+
+  None
 }
 
 /// Extract plain text description from Jira's ADF or plain text format

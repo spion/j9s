@@ -8,6 +8,7 @@ pub struct IssueSummary {
   pub issue_type: String,
   pub assignee: Option<String>,
   pub priority: Option<String>,
+  pub epic: Option<String>,
 }
 
 /// Full issue details
@@ -62,12 +63,4 @@ pub struct BoardColumn {
 #[derive(Debug, Clone)]
 pub struct BoardConfiguration {
   pub columns: Vec<BoardColumn>,
-}
-
-/// Quick filter for a board
-#[derive(Debug, Clone)]
-pub struct QuickFilter {
-  pub id: u64,
-  pub name: String,
-  pub jql: String,
 }

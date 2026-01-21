@@ -12,6 +12,8 @@ pub struct Config {
 pub struct JiraConfig {
   pub url: String,
   pub email: String,
+  /// Custom field name for epic link (e.g., "customfield_10014")
+  pub epic_field: Option<String>,
 }
 
 impl Config {

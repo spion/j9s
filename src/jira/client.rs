@@ -1,9 +1,9 @@
 use crate::config::Config;
 use crate::jira::api_types::{
   reserialize, ApiBoardConfigResponse, ApiBoardIssuesResponse, ApiIssue, ApiIssueFields,
-  ApiQuickFiltersResponse, ApiTransitionsResponse,
+  ApiTransitionsResponse,
 };
-use crate::jira::types::{Board, BoardConfiguration, Issue, IssueSummary, QuickFilter};
+use crate::jira::types::{Board, BoardConfiguration, Issue, IssueSummary};
 use color_eyre::{eyre::eyre, Result};
 use serde_json::Value;
 use url::form_urlencoded;
@@ -12,6 +12,7 @@ use url::form_urlencoded;
 #[derive(Clone)]
 pub struct JiraClient {
   client: gouqi::r#async::Jira,
+  epic_field: Option<String>,
 }
 
 impl JiraClient {
@@ -20,10 +21,6 @@ impl JiraClient {
 
     let credentials = gouqi::Credentials::Basic(config.jira.email.clone(), token);
 
-    // Create optimized HTTP client:
-    // - tcp_nodelay: disable Nagle's algorithm for lower latency
-    // - pool_max_idle_per_host: better connection reuse
-    // - rustls-tls-native-roots: use system CA certificates
     let http_client = reqwest::Client::builder()
       .tcp_nodelay(true)
       .pool_max_idle_per_host(10)
@@ -33,7 +30,10 @@ impl JiraClient {
     let client = gouqi::r#async::Jira::from_client(&config.jira.url, credentials, http_client)
       .map_err(|e| eyre!("Failed to create Jira client: {}", e))?;
 
-    Ok(Self { client })
+    Ok(Self {
+      client,
+      epic_field: config.jira.epic_field.clone(),
+    })
   }
 
   /// Search for issues using JQL
@@ -57,6 +57,7 @@ impl JiraClient {
       .await
       .map_err(|e| eyre!("Failed to search issues: {}", e))?;
 
+    let epic_field = self.epic_field.as_deref();
     let issues: Vec<IssueSummary> = stream
       .map(|issue| {
         let fields: ApiIssueFields = reserialize(&issue.fields)?;
@@ -65,7 +66,7 @@ impl JiraClient {
             key: issue.key,
             fields,
           }
-          .into_summary(),
+          .into_summary_with_epic(epic_field),
         )
       })
       .try_collect()
@@ -125,7 +126,11 @@ impl JiraClient {
   }
 
   /// Get issues for a specific board
-  pub async fn get_board_issues(&self, board_id: u64, jql: Option<&str>) -> Result<Vec<IssueSummary>> {
+  pub async fn get_board_issues(
+    &self,
+    board_id: u64,
+    jql: Option<&str>,
+  ) -> Result<Vec<IssueSummary>> {
     let mut all_issues = Vec::new();
     let mut start_at = 0u64;
     let max_results = 100u64;
@@ -149,11 +154,12 @@ impl JiraClient {
         .await
         .map_err(|e| eyre!("Failed to get board issues: {}", e))?;
 
+      let epic_field = self.epic_field.as_deref();
       let issues_count = response.issues.len() as u64;
       let issues: Vec<IssueSummary> = response
         .issues
         .into_iter()
-        .map(|issue| issue.into_summary())
+        .map(|issue| issue.into_summary_with_epic(epic_field))
         .collect();
 
       all_issues.extend(issues);
@@ -214,37 +220,5 @@ impl JiraClient {
       .map_err(|e| eyre!("Failed to execute transition: {}", e))?;
 
     Ok(())
-  }
-
-  /// Get quick filters for a board
-  pub async fn get_board_quick_filters(&self, board_id: u64) -> Result<Vec<QuickFilter>> {
-    let mut all_filters = Vec::new();
-    let mut start_at = 0u64;
-    let max_results = 50u64;
-
-    loop {
-      let endpoint = format!(
-        "/board/{}/quickfilter?startAt={}&maxResults={}",
-        board_id, start_at, max_results
-      );
-
-      let response: ApiQuickFiltersResponse = self
-        .client
-        .get("agile", &endpoint)
-        .await
-        .map_err(|e| eyre!("Failed to get board quick filters: {}", e))?;
-
-      let is_last = response.is_last;
-      let filters: Vec<QuickFilter> = response.values.into_iter().map(QuickFilter::from).collect();
-
-      all_filters.extend(filters);
-
-      if is_last {
-        break;
-      }
-      start_at += max_results;
-    }
-
-    Ok(all_filters)
   }
 }

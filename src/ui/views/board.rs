@@ -1,7 +1,10 @@
 use crate::jira::client::JiraClient;
-use crate::jira::types::{BoardColumn, BoardConfiguration, IssueSummary, QuickFilter, StatusInfo};
+use crate::jira::types::{BoardColumn, BoardConfiguration, IssueSummary, StatusInfo};
 use crate::query::{Query, QueryState};
-use crate::ui::components::{SearchInput, SearchResult, StatusPicker, StatusPickerResult};
+use crate::ui::components::{
+  FilterField, FilterFieldPicker, FilterFieldPickerResult, SearchInput, SearchResult, StatusPicker,
+  StatusPickerResult,
+};
 use crate::ui::ensure_valid_selection;
 use crate::ui::renderfns::{status_color, truncate};
 use crate::ui::view::{Shortcut, View, ViewAction};
@@ -9,18 +12,19 @@ use crate::ui::views::IssueDetailView;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
-use tracing::{debug, info};
+use std::collections::BTreeSet;
+use tracing::info;
 
 /// Combined board data fetched in parallel
 #[derive(Clone)]
 struct BoardData {
   issues: Vec<IssueSummary>,
   columns: Vec<BoardColumn>,
-  quick_filters: Vec<QuickFilter>,
 }
 
 /// View for displaying a single board with its issues
 pub struct BoardView {
+  #[allow(dead_code)]
   board_id: u64,
   board_name: String,
 
@@ -34,9 +38,14 @@ pub struct BoardView {
   list_state: ListState,    // Selection for list mode
   swimlane_selected: usize, // Selection within column for swimlane mode
   selected_column: usize,
-  selected_filter: Option<usize>, // Index into quick_filters, None = "All"
-  filter_bar_active: bool,        // Whether filter tabs are shown/navigable
   swimlane_mode: bool,
+
+  // Filter state (client-side filtering by field values)
+  filter_field: FilterField, // Which field to filter by (None, Assignee, Epic)
+  filter_values: Vec<Option<String>>, // Unique values for the current field (None = unassigned)
+  selected_filter_value: usize, // 0 = All, 1+ = index into filter_values
+  filter_bar_active: bool,   // Whether filter tabs are shown/navigable
+  filter_picker: FilterFieldPicker, // Picker for selecting filter field
 
   // Components
   search: SearchInput,
@@ -57,22 +66,19 @@ impl BoardView {
         // Fetch all board data in parallel
         // Filter: unresolved issues + resolved in past 2 weeks
         let jql = "resolution IS EMPTY OR resolved >= -2w";
-        let (issues_result, config_result, filters_result) = tokio::join!(
+        let (issues_result, config_result) = tokio::join!(
           jira.get_board_issues(board_id, Some(jql)),
           jira.get_board_configuration(board_id),
-          jira.get_board_quick_filters(board_id),
         );
 
         let issues = issues_result.map_err(|e| e.to_string())?;
         let config = config_result.unwrap_or_else(|_| BoardConfiguration {
           columns: Vec::new(),
         });
-        let quick_filters = filters_result.unwrap_or_default();
 
         Ok(BoardData {
           issues,
           columns: config.columns,
-          quick_filters,
         })
       }
     });
@@ -88,9 +94,12 @@ impl BoardView {
       list_state: ListState::default(),
       swimlane_selected: 0,
       selected_column: 0,
-      selected_filter: None,
-      filter_bar_active: false,
       swimlane_mode: false,
+      filter_field: FilterField::None,
+      filter_values: Vec::new(),
+      selected_filter_value: 0,
+      filter_bar_active: false,
+      filter_picker: FilterFieldPicker::new(),
       search: SearchInput::new(),
       status_picker: StatusPicker::new(),
       pending_issue_key: None,
@@ -111,20 +120,69 @@ impl BoardView {
     self.data().map(|d| d.columns.as_slice()).unwrap_or(&[])
   }
 
-  fn quick_filters(&self) -> &[QuickFilter] {
-    self
-      .data()
-      .map(|d| d.quick_filters.as_slice())
-      .unwrap_or(&[])
-  }
-
   fn is_loading(&self) -> bool {
     self.query.is_loading()
   }
 
-  /// Get issues filtered by active quick filters and search
+  /// Extract the value of the current filter field from an issue
+  fn get_field_value(&self, issue: &IssueSummary) -> Option<String> {
+    match self.filter_field {
+      FilterField::None => None,
+      FilterField::Assignee => issue.assignee.clone(),
+      FilterField::Epic => issue.epic.clone(),
+    }
+  }
+
+  /// Extract unique values for the current filter field from all issues
+  fn extract_filter_values(&self) -> Vec<Option<String>> {
+    if matches!(self.filter_field, FilterField::None) {
+      return Vec::new();
+    }
+
+    let mut values: BTreeSet<Option<String>> = BTreeSet::new();
+    for issue in self.issues() {
+      values.insert(self.get_field_value(issue));
+    }
+
+    // Convert to Vec, with None (unassigned) first if present
+    let mut result: Vec<Option<String>> = Vec::new();
+    if values.contains(&None) {
+      result.push(None);
+    }
+    for v in values.into_iter().flatten() {
+      result.push(Some(v));
+    }
+    result
+  }
+
+  /// Update filter values when filter field changes or data loads
+  fn update_filter_values(&mut self) {
+    self.filter_values = self.extract_filter_values();
+    self.selected_filter_value = 0; // Reset to "All"
+  }
+
+  /// Get issues filtered by active filter
   fn filtered_issues(&self) -> Vec<&IssueSummary> {
-    self.issues().iter().collect()
+    let issues = self.issues();
+
+    // If no filter field selected or "All" is selected, return all
+    if matches!(self.filter_field, FilterField::None) || self.selected_filter_value == 0 {
+      return issues.iter().collect();
+    }
+
+    // Get the selected filter value (index 0 is "All", so we offset by 1)
+    let filter_value = self.filter_values.get(self.selected_filter_value - 1);
+
+    issues
+      .iter()
+      .filter(|issue| {
+        let issue_value = self.get_field_value(issue);
+        match filter_value {
+          Some(fv) => issue_value == *fv,
+          None => true, // No filter value selected, show all
+        }
+      })
+      .collect()
   }
 
   /// Get issues for a specific column (by status)
@@ -285,36 +343,42 @@ impl BoardView {
     }
   }
 
-  /// Render quick filter tabs
+  /// Render filter tabs
   fn render_filters(&self, frame: &mut Frame, area: Rect) {
-    let quick_filters = self.quick_filters();
-    if quick_filters.is_empty() {
+    if self.filter_values.is_empty() {
       return;
     }
 
     let mut spans = Vec::new();
 
-    // "All" tab (when no filter is selected)
-    let all_style = if self.selected_filter.is_none() {
+    // Show current filter field name
+    spans.push(Span::styled(
+      format!("[{}] ", self.filter_field.label()),
+      Style::default().fg(Color::Yellow),
+    ));
+
+    // "All" tab (index 0)
+    let all_style = if self.selected_filter_value == 0 {
       Style::default().fg(Color::Black).bg(Color::Cyan)
     } else {
       Style::default().fg(Color::Gray)
     };
     spans.push(Span::styled(" All ", all_style));
-    spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
 
     // Individual filter tabs
-    for (idx, filter) in quick_filters.iter().enumerate() {
-      let is_selected = self.selected_filter == Some(idx);
+    for (idx, value) in self.filter_values.iter().enumerate() {
+      spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+      let is_selected = self.selected_filter_value == idx + 1;
       let style = if is_selected {
         Style::default().fg(Color::Black).bg(Color::Cyan)
       } else {
         Style::default().fg(Color::Gray)
       };
-      spans.push(Span::styled(format!(" {} ", filter.name), style));
-      if idx < quick_filters.len() - 1 {
-        spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
-      }
+      let label = match value {
+        Some(v) => format!(" {} ", truncate(v, 15)),
+        None => " Unassigned ".to_string(),
+      };
+      spans.push(Span::styled(label, style));
     }
 
     let line = Line::from(spans);
@@ -383,33 +447,27 @@ impl BoardView {
 
   /// Navigate filter tabs (left/right)
   fn navigate_filter(&mut self, direction: i32) {
-    let quick_filters = self.quick_filters();
-    if quick_filters.is_empty() {
+    if self.filter_values.is_empty() {
       return;
     }
 
-    // Total tabs = "All" + quick_filters
-    let total_tabs = quick_filters.len() + 1;
-
-    // Current position: None = 0 (All), Some(idx) = idx + 1
-    let current_pos = self.selected_filter.map(|i| i + 1).unwrap_or(0);
+    // Total tabs = "All" + filter_values
+    let total_tabs = self.filter_values.len() + 1;
 
     // Calculate new position with wrapping
     let new_pos = if direction > 0 {
-      (current_pos + 1) % total_tabs
+      (self.selected_filter_value + 1) % total_tabs
+    } else if self.selected_filter_value == 0 {
+      total_tabs - 1
     } else {
-      current_pos.checked_sub(1).unwrap_or(total_tabs - 1)
+      self.selected_filter_value - 1
     };
 
-    // Convert back: 0 = None (All), > 0 = Some(idx - 1)
-    self.selected_filter = if new_pos == 0 {
-      None
-    } else {
-      Some(new_pos - 1)
-    };
+    self.selected_filter_value = new_pos;
 
     // Reset list selection when changing filter
     self.list_state.select(Some(0));
+    self.swimlane_selected = 0;
   }
 
   /// Initiate a status change to the target column
@@ -538,12 +596,26 @@ impl View for BoardView {
     // Clear error message on any key press
     self.error_message = None;
 
-    // Handle status picker first if active
+    // Handle filter field picker if active
+    if self.filter_picker.is_active() {
+      match self.filter_picker.handle_key(key) {
+        FilterFieldPickerResult::Active => return ViewAction::None,
+        FilterFieldPickerResult::Selected(field) => {
+          self.filter_field = field;
+          self.update_filter_values();
+          self.filter_bar_active = !matches!(field, FilterField::None);
+          return ViewAction::None;
+        }
+        FilterFieldPickerResult::Cancelled => return ViewAction::None,
+        FilterFieldPickerResult::NotHandled => {}
+      }
+    }
+
+    // Handle status picker if active
     if self.status_picker.is_active() {
       match self.status_picker.handle_key(key) {
         StatusPickerResult::Active => return ViewAction::None,
         StatusPickerResult::Selected(status_id) => {
-          // Execute status update with selected status
           if let Some(issue_key) = self.pending_issue_key.take() {
             self.update_issue_status(&issue_key, &status_id);
           }
@@ -557,7 +629,7 @@ impl View for BoardView {
       }
     }
 
-    // Let search component try to handle first
+    // Search component active
     match self.search.handle_key(key) {
       SearchResult::Active => return ViewAction::None,
       SearchResult::Submitted(_query) => {
@@ -571,19 +643,18 @@ impl View for BoardView {
     match key.code {
       // Filter tab navigation (when filter bar active)
       KeyCode::PageUp => {
-        if self.filter_bar_active && !self.quick_filters().is_empty() {
+        if self.filter_bar_active && !self.filter_values.is_empty() {
           self.navigate_filter(-1);
         }
       }
       KeyCode::PageDown => {
-        if self.filter_bar_active && !self.quick_filters().is_empty() {
+        if self.filter_bar_active && !self.filter_values.is_empty() {
           self.navigate_filter(1);
         }
       }
       KeyCode::Char('f') => {
-        if !self.quick_filters().is_empty() {
-          self.filter_bar_active = !self.filter_bar_active;
-        }
+        // Open filter field picker
+        self.filter_picker.show();
       }
       KeyCode::Char('s') => {
         self.swimlane_mode = !self.swimlane_mode;
@@ -594,6 +665,7 @@ impl View for BoardView {
       // Refresh
       KeyCode::Char('r') => {
         self.query.refetch();
+        // Update filter values after refetch completes (will happen in tick)
       }
       _ => {}
     }
@@ -663,7 +735,7 @@ impl View for BoardView {
 
   fn render(&mut self, frame: &mut Frame, area: Rect) {
     // Split area for filters (if active) and main content
-    let show_filters = self.filter_bar_active && !self.quick_filters().is_empty();
+    let show_filters = self.filter_bar_active && !self.filter_values.is_empty();
     let (filter_area, content_area) = if show_filters {
       let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -674,7 +746,7 @@ impl View for BoardView {
       (None, area)
     };
 
-    // Render quick filters when active
+    // Render filter tabs when active
     if let Some(filter_area) = filter_area {
       self.render_filters(frame, filter_area);
     }
@@ -688,6 +760,9 @@ impl View for BoardView {
 
     // Let search component render its overlay
     self.search.render_overlay(frame, area);
+
+    // Render filter field picker if active
+    self.filter_picker.render_overlay(frame, area);
 
     // Render status picker if active
     self.status_picker.render_overlay(frame, area);
@@ -705,7 +780,13 @@ impl View for BoardView {
   }
 
   fn tick(&mut self) {
+    let was_loading = self.query.is_loading();
     self.query.poll();
+
+    // Update filter values when data finishes loading
+    if was_loading && !self.query.is_loading() && self.query.data().is_some() {
+      self.update_filter_values();
+    }
 
     // Poll status mutation if in progress
     if let Some(ref mut query) = self.status_mutation {
@@ -722,22 +803,19 @@ impl View for BoardView {
       Shortcut::new("/", "search"),
       Shortcut::new("r", "refresh"),
       Shortcut::new("q", "back"),
+      Shortcut::new("f", "filter"),
     ];
 
-    // Filter shortcuts
-    if !self.quick_filters().is_empty() {
-      shortcuts.push(Shortcut::new("f", "filters"));
-      if self.filter_bar_active {
-        shortcuts.push(Shortcut::new("h/l", "filter tab"));
-      }
+    // Filter tab navigation shortcuts
+    if self.filter_bar_active && !self.filter_values.is_empty() {
+      shortcuts.push(Shortcut::new("PgUp/Dn", "filter tab"));
     }
 
     // Swimlane shortcuts
     if !self.columns().is_empty() {
       shortcuts.push(Shortcut::new("s", "swimlane"));
       if self.swimlane_mode {
-        shortcuts.push(Shortcut::new("PgUp/Dn", "column"));
-        shortcuts.push(Shortcut::new("S-PgUp/Dn", "transition"));
+        shortcuts.push(Shortcut::new("S-h/l", "transition"));
       }
     }
 
