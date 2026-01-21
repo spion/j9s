@@ -31,6 +31,9 @@ pub struct BoardView {
   // Jira client for API calls
   jira: JiraClient,
 
+  // Config: swimlane names to hide (lowercase for case-insensitive matching)
+  hide_swimlanes: BTreeSet<String>,
+
   // Data query
   query: Query<BoardData>,
 
@@ -58,7 +61,12 @@ pub struct BoardView {
 }
 
 impl BoardView {
-  pub fn new(board_id: u64, board_name: String, jira: JiraClient) -> Self {
+  pub fn new(
+    board_id: u64,
+    board_name: String,
+    jira: JiraClient,
+    hide_swimlanes: BTreeSet<String>,
+  ) -> Self {
     let jira_for_query = jira.clone();
     let mut query = Query::new(move || {
       let jira = jira_for_query.clone();
@@ -90,6 +98,7 @@ impl BoardView {
       board_id,
       board_name,
       jira,
+      hide_swimlanes,
       query,
       list_state: ListState::default(),
       swimlane_selected: 0,
@@ -116,8 +125,16 @@ impl BoardView {
     self.data().map(|d| d.issues.as_slice()).unwrap_or(&[])
   }
 
-  fn columns(&self) -> &[BoardColumn] {
-    self.data().map(|d| d.columns.as_slice()).unwrap_or(&[])
+  fn columns(&self) -> Vec<&BoardColumn> {
+    self
+      .data()
+      .map(|d| {
+        d.columns
+          .iter()
+          .filter(|col| !self.hide_swimlanes.contains(&col.name.to_lowercase()))
+          .collect()
+      })
+      .unwrap_or_default()
   }
 
   fn is_loading(&self) -> bool {

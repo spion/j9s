@@ -8,17 +8,19 @@ use crate::ui::views::BoardView;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use std::collections::BTreeSet;
 
 /// View for displaying a list of boards
 pub struct BoardListView {
   jira: JiraClient,
+  hide_swimlanes: BTreeSet<String>,
   query: Query<Vec<Board>>,
   list_state: ListState,
   search: SearchInput,
 }
 
 impl BoardListView {
-  pub fn new(project: Option<String>, jira: JiraClient) -> Self {
+  pub fn new(project: Option<String>, jira: JiraClient, hide_swimlanes: BTreeSet<String>) -> Self {
     let jira_for_query = jira.clone();
     let mut query = Query::new(move || {
       let jira = jira_for_query.clone();
@@ -36,6 +38,7 @@ impl BoardListView {
 
     Self {
       jira,
+      hide_swimlanes,
       query,
       list_state: ListState::default(),
       search: SearchInput::new(),
@@ -143,6 +146,7 @@ impl View for BoardListView {
               board.id,
               board.name.clone(),
               self.jira.clone(),
+              self.hide_swimlanes.clone(),
             )));
           }
         }

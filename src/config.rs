@@ -1,11 +1,29 @@
 use color_eyre::{eyre::eyre, Result};
 use serde::Deserialize;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
   pub jira: JiraConfig,
   pub default_project: Option<String>,
+  #[serde(default)]
+  pub boards: BoardsConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BoardsConfig {
+  /// Swimlane names to hide in board views (case-insensitive)
+  #[serde(default, deserialize_with = "deserialize_lowercase_set")]
+  pub hide_swimlanes: BTreeSet<String>,
+}
+
+fn deserialize_lowercase_set<'de, D>(deserializer: D) -> Result<BTreeSet<String>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+{
+  let v: Vec<String> = Vec::deserialize(deserializer)?;
+  Ok(v.into_iter().map(|s| s.to_lowercase()).collect())
 }
 
 #[derive(Debug, Clone, Deserialize)]

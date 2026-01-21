@@ -132,7 +132,12 @@ impl App {
       }
       "boards" => {
         let project = self.config.default_project.clone();
-        self.view_stack = vec![Box::new(BoardListView::new(project, self.jira.clone()))];
+        let hide_swimlanes = self.config.boards.hide_swimlanes.clone();
+        self.view_stack = vec![Box::new(BoardListView::new(
+          project,
+          self.jira.clone(),
+          hide_swimlanes,
+        ))];
       }
       "epics" => {
         // TODO: Implement epics view

@@ -14,6 +14,14 @@ jira:
 # Can be overridden with -p/--project flag
 default_project: "PROJ"
 
+# Board view settings (optional)
+# boards:
+#   # Swimlanes to hide in board views (by name)
+#   # Useful for hiding swimlanes like "Done" or "Backlog"
+#   hide_swimlanes:
+#     - "Done"
+#     - "Backlog"
+
 # Note: API token should be set via environment variable:
 #   export J9S_JIRA_TOKEN="your-api-token"
 #
