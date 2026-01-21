@@ -250,16 +250,16 @@ impl BoardView {
 
         let line = Line::from(vec![
           Span::styled(
-            format!("{:<12}", issue.key),
+            format!("{:<15}", issue.key),
             Style::default().fg(Color::Cyan),
           ),
           Span::raw(" "),
           Span::styled(
-            format!("{:<12}", truncate(&issue.status, 12)),
+            format!("{:<15}", truncate(&issue.status, 15)),
             Style::default().fg(color),
           ),
           Span::raw(" "),
-          Span::raw(truncate(&issue.summary, 60)),
+          Span::raw(issue.summary.clone()),
         ]);
         ListItem::new(line)
       })
@@ -318,7 +318,7 @@ impl BoardView {
         Color::Blue
       };
 
-      let title = format!(" {} ({}) ", truncate(&column.name, 10), issues.len());
+      let title = format!(" {} ({}) ", truncate(&column.name, 15), issues.len());
       let block = Block::default()
         .title(title)
         .title_alignment(Alignment::Center)
@@ -329,7 +329,6 @@ impl BoardView {
         .iter()
         .map(|issue| {
           let issue_id = Line::from(vec![Span::styled(
-            // truncate(&issue.key, col_area.width.saturating_sub(4) as usize),
             &issue.key,
             Style::default().fg(Color::Cyan),
           )]);

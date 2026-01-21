@@ -107,11 +107,11 @@ impl IssueListView {
           ),
           Span::raw(" "),
           Span::styled(
-            format!("{:<12}", truncate(&issue.status, 12)),
+            format!("{:<15}", truncate(&issue.status, 15)),
             Style::default().fg(color),
           ),
           Span::raw(" "),
-          Span::raw(truncate(&issue.summary, 60)),
+          Span::raw(issue.summary.clone()),
         ]);
         ListItem::new(line)
       })
