@@ -4,11 +4,17 @@
 jira:
   # Your Jira instance URL
   # For Jira Cloud: https://your-domain.atlassian.net
-  # For Jira Server/DC: https://jira.your-company.com
+  # For Jira On-premise (Server/DC): https://jira.your-company.com
   url: "https://your-domain.atlassian.net"
 
-  # Your email address (for Jira Cloud) or username (for Server/DC)
+  # Your email address (for Jira Cloud) or username (for On-premise)
   email: "you@example.com"
+
+  # Authentication type (optional, default: auto)
+  # - auto: detects based on URL (.atlassian.net = cloud, otherwise on-premise)
+  # - cloud: force Basic auth (email + token as password)
+  # - onpremise: force Bearer auth (PAT), falls back to Basic auth
+  # auth_type: auto
 
 # Default project key to show on startup (optional)
 # Can be overridden with -p/--project flag
@@ -22,10 +28,17 @@ default_project: "PROJ"
 #     - "Done"
 #     - "Backlog"
 
-# Note: API token should be set via environment variable:
+# Authentication
+# ==============
+# Set ONE of these environment variables:
+#
+# J9S_JIRA_TOKEN - API token or Personal Access Token (PAT)
+# J9S_JIRA_PASSWORD - Password for Basic auth (works with both Cloud and On-premise)
+#
+# Examples:
 #   export J9S_JIRA_TOKEN="your-api-token"
+#   export J9S_JIRA_PASSWORD="your-password"
 #
-# For Jira Cloud, generate a token at:
-#   https://id.atlassian.com/manage-profile/security/api-tokens
-#
-# For Jira Server/DC, use a Personal Access Token or your password
+# Generate tokens at:
+#   Cloud: https://id.atlassian.com/manage-profile/security/api-tokens
+#   On-premise: Your Jira profile settings > Personal Access Tokens

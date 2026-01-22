@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{AuthType, Config};
 use crate::jira::api_types::{
   reserialize, ApiBoardConfigResponse, ApiBoardIssuesResponse, ApiIssue, ApiIssueFields,
   ApiTransitionsResponse,
@@ -15,11 +15,59 @@ pub struct JiraClient {
   epic_field: Option<String>,
 }
 
+fn get_issue_fields(epic_field: Option<&str>) -> Vec<&str> {
+  let mut fields = vec!["summary", "status", "issuetype", "assignee", "priority"];
+  if let Some(epic_field) = epic_field {
+    fields.push(epic_field);
+  }
+  fields
+}
 impl JiraClient {
-  pub fn new(config: &Config) -> Result<Self> {
-    let token = Config::get_api_token()?;
+  /// Resolve auth type based on config and URL
+  fn resolve_auth_type(auth_type: AuthType, url: &str) -> AuthType {
+    match auth_type {
+      AuthType::Auto => {
+        if url.contains(".atlassian.net") {
+          AuthType::Cloud
+        } else {
+          AuthType::Onpremise
+        }
+      }
+      other => other,
+    }
+  }
 
-    let credentials = gouqi::Credentials::Basic(config.jira.email.clone(), token);
+  fn get_credentials(auth_type: AuthType, username: &str) -> Result<gouqi::Credentials> {
+    let token = Config::get_api_token().ok();
+    let password = Config::get_password().ok();
+
+    match auth_type {
+      AuthType::Cloud => {
+        // Cloud uses Basic auth with email + API token (or password)
+        let secret = token.or(password).ok_or_else(|| {
+          eyre!("Jira Cloud requires J9S_JIRA_TOKEN or J9S_JIRA_PASSWORD to be set")
+        })?;
+        Ok(gouqi::Credentials::Basic(username.to_string(), secret))
+      }
+      AuthType::Onpremise => {
+        // On-premise prefers Bearer token, falls back to Basic auth with password
+        if let Some(token) = token {
+          Ok(gouqi::Credentials::Bearer(token))
+        } else if let Some(password) = password {
+          Ok(gouqi::Credentials::Basic(username.to_string(), password))
+        } else {
+          Err(eyre!(
+            "Jira On-premise requires J9S_JIRA_TOKEN (for PAT/Bearer) or J9S_JIRA_PASSWORD (for Basic auth)"
+          ))
+        }
+      }
+      AuthType::Auto => unreachable!("Auth type should be resolved before calling get_credentials"),
+    }
+  }
+
+  pub fn new(config: &Config) -> Result<Self> {
+    let auth_type = Self::resolve_auth_type(config.jira.auth_type, &config.jira.url);
+    let credentials = Self::get_credentials(auth_type, &config.jira.email)?;
 
     let http_client = reqwest::Client::builder()
       .tcp_nodelay(true)
@@ -41,14 +89,9 @@ impl JiraClient {
     use futures::{StreamExt, TryStreamExt};
 
     let search = self.client.search();
+
     let options = gouqi::SearchOptions::builder()
-      .fields(vec![
-        "summary",
-        "status",
-        "issuetype",
-        "assignee",
-        "priority",
-      ])
+      .fields(get_issue_fields(self.epic_field.as_deref()))
       .max_results(100)
       .build();
 
@@ -135,7 +178,7 @@ impl JiraClient {
     let mut start_at = 0u64;
     let max_results = 100u64;
 
-    let fields = "summary,status,issuetype,assignee,priority";
+    let fields = get_issue_fields(self.epic_field.as_deref()).join(",");
 
     loop {
       let mut endpoint = format!(

@@ -26,12 +26,27 @@ where
   Ok(v.into_iter().map(|s| s.to_lowercase()).collect())
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthType {
+  /// Auto-detect based on URL: .atlassian.net = cloud, else on-premise
+  #[default]
+  Auto,
+  /// Jira Cloud - uses Basic auth (email + API token as password)
+  Cloud,
+  /// Jira On-premise - uses Bearer auth (PAT) or Basic auth fallback
+  Onpremise,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct JiraConfig {
   pub url: String,
   pub email: String,
   /// Custom field name for epic link (e.g., "customfield_10014")
   pub epic_field: Option<String>,
+  /// Authentication type: auto, cloud, or onpremise
+  #[serde(default)]
+  pub auth_type: AuthType,
 }
 
 impl Config {
@@ -101,5 +116,13 @@ impl Config {
           "Jira API token not found. Set J9S_JIRA_TOKEN or JIRA_API_TOKEN environment variable."
         )
       })
+  }
+
+  /// Get the Jira password from environment variables.
+  ///
+  /// Checks J9S_JIRA_PASSWORD.
+  pub fn get_password() -> Result<String> {
+    std::env::var("J9S_JIRA_PASSWORD")
+      .map_err(|_| eyre!("Jira password not found. Set J9S_JIRA_PASSWORD environment variable."))
   }
 }
