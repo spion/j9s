@@ -49,6 +49,7 @@ pub struct BoardView {
 
   // Components
   search: SearchInput,
+  search_filter: Option<String>,
   status_picker: StatusPicker,
 
   // Status update state
@@ -104,6 +105,7 @@ impl BoardView {
       filter_bar: FilterBar::new(),
       filter_picker: FilterFieldPicker::new(),
       search: SearchInput::new(),
+      search_filter: None,
       status_picker: StatusPicker::new(),
       pending_issue_key: None,
       status_mutation: None,
@@ -172,21 +174,40 @@ impl BoardView {
     self.filter_bar.update_values(values);
   }
 
-  /// Get issues filtered by active filter
+  /// Get issues filtered by active filter and search
   fn filtered_issues(&self) -> Vec<&IssueSummary> {
     let issues = self.issues();
     let field = self.filter_bar.field();
 
-    // If no filter active, return all
-    let Some(filter_value) = self.filter_bar.selected_value() else {
-      return issues.iter().collect();
+    // First apply field filter
+    let filtered: Vec<&IssueSummary> = if let Some(filter_value) = self.filter_bar.selected_value()
+    {
+      issues
+        .iter()
+        .filter(|issue| {
+          let issue_value = Self::get_field_value(field, issue);
+          issue_value == *filter_value
+        })
+        .collect()
+    } else {
+      issues.iter().collect()
     };
 
-    issues
-      .iter()
+    // Then apply search filter
+    let Some(query) = &self.search_filter else {
+      return filtered;
+    };
+    let query_lower = query.to_lowercase();
+    filtered
+      .into_iter()
       .filter(|issue| {
-        let issue_value = Self::get_field_value(field, issue);
-        issue_value == *filter_value
+        issue.key.to_lowercase().contains(&query_lower)
+          || issue.summary.to_lowercase().contains(&query_lower)
+          || issue.status.to_lowercase().contains(&query_lower)
+          || issue
+            .assignee
+            .as_ref()
+            .map_or(false, |a| a.to_lowercase().contains(&query_lower))
       })
       .collect()
   }
@@ -205,10 +226,16 @@ impl BoardView {
     let len = self.filtered_issues().len();
     ensure_valid_selection(&mut self.list_state, len);
 
+    let search_indicator = self
+      .search_filter
+      .as_ref()
+      .map(|q| format!(" [/{}]", q))
+      .unwrap_or_default();
+
     let title = match self.query.state() {
       QueryState::Loading => format!(" {} (loading...) ", self.board_name),
       QueryState::Error(e) => format!(" {} (error: {}) ", self.board_name, e),
-      _ => format!(" {} ({} issues) ", self.board_name, self.issues().len()),
+      _ => format!(" {} ({} issues){} ", self.board_name, len, search_indicator),
     };
 
     let block = Block::default()
@@ -572,11 +599,13 @@ impl BoardView {
     // Search
     match self.search.handle_key(key) {
       KeyResult::Handled => return Some(ViewAction::None),
-      KeyResult::Event(SearchEvent::Submitted(_query)) => {
-        // TODO: Apply search filter
+      KeyResult::Event(SearchEvent::Changed(query)) => {
+        self.search_filter = if query.is_empty() { None } else { Some(query) };
+        self.list_state.select(Some(0));
+        self.swimlane_selected = 0;
         return Some(ViewAction::None);
       }
-      KeyResult::Event(SearchEvent::Cancelled) => return Some(ViewAction::None),
+      KeyResult::Event(SearchEvent::Submitted) => return Some(ViewAction::None),
       KeyResult::NotHandled => {}
     }
 

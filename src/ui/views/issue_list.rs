@@ -17,6 +17,7 @@ pub struct IssueListView {
   query: Query<Vec<IssueSummary>>,
   list_state: ListState,
   search: SearchInput,
+  search_filter: Option<String>,
 }
 
 impl IssueListView {
@@ -52,6 +53,7 @@ impl IssueListView {
       query,
       list_state: ListState::default(),
       search: SearchInput::new(),
+      search_filter: None,
     }
   }
 
@@ -59,18 +61,44 @@ impl IssueListView {
     self.query.data().map(|v| v.as_slice()).unwrap_or(&[])
   }
 
+  fn filtered_issues(&self) -> Vec<&IssueSummary> {
+    let issues = self.issues();
+    let Some(query) = &self.search_filter else {
+      return issues.iter().collect();
+    };
+    let query_lower = query.to_lowercase();
+    issues
+      .iter()
+      .filter(|issue| {
+        issue.key.to_lowercase().contains(&query_lower)
+          || issue.summary.to_lowercase().contains(&query_lower)
+          || issue.status.to_lowercase().contains(&query_lower)
+          || issue
+            .assignee
+            .as_ref()
+            .map_or(false, |a| a.to_lowercase().contains(&query_lower))
+      })
+      .collect()
+  }
+
   fn is_loading(&self) -> bool {
     self.query.is_loading()
   }
 
   fn render_list(&mut self, frame: &mut Frame, area: Rect) {
-    let len = self.issues().len();
+    let len = self.filtered_issues().len();
     ensure_valid_selection(&mut self.list_state, len);
+
+    let search_indicator = self
+      .search_filter
+      .as_ref()
+      .map(|q| format!(" [/{}]", q))
+      .unwrap_or_default();
 
     let title = match self.query.state() {
       QueryState::Loading => format!(" Issues [{}] (loading...) ", self.project),
       QueryState::Error(e) => format!(" Issues [{}] (error: {}) ", self.project, e),
-      _ => format!(" Issues [{}] ({}) ", self.project, self.issues().len()),
+      _ => format!(" Issues [{}] ({}){} ", self.project, len, search_indicator),
     };
 
     let block = Block::default()
@@ -95,7 +123,7 @@ impl IssueListView {
     }
 
     let items: Vec<ListItem> = self
-      .issues()
+      .filtered_issues()
       .iter()
       .map(|issue| {
         let color = status_color(&issue.status);
@@ -133,11 +161,12 @@ impl IssueListView {
   fn handle_overlays(&mut self, key: KeyEvent) -> Option<ViewAction> {
     match self.search.handle_key(key) {
       KeyResult::Handled => Some(ViewAction::None),
-      KeyResult::Event(SearchEvent::Submitted(_query)) => {
-        // TODO: Apply filter
+      KeyResult::Event(SearchEvent::Changed(query)) => {
+        self.search_filter = if query.is_empty() { None } else { Some(query) };
+        self.list_state.select(Some(0));
         Some(ViewAction::None)
       }
-      KeyResult::Event(SearchEvent::Cancelled) => Some(ViewAction::None),
+      KeyResult::Event(SearchEvent::Submitted) => Some(ViewAction::None),
       KeyResult::NotHandled => None,
     }
   }
@@ -164,7 +193,7 @@ impl IssueListView {
       }
       KeyCode::Enter => {
         if let Some(idx) = self.list_state.selected() {
-          if let Some(issue) = self.issues().get(idx) {
+          if let Some(issue) = self.filtered_issues().get(idx) {
             return Some(ViewAction::Push(Box::new(IssueDetailView::new(
               issue.key.clone(),
               self.jira.clone(),

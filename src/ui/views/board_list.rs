@@ -17,6 +17,7 @@ pub struct BoardListView {
   query: Query<Vec<Board>>,
   list_state: ListState,
   search: SearchInput,
+  search_filter: Option<String>,
 }
 
 impl BoardListView {
@@ -42,6 +43,7 @@ impl BoardListView {
       query,
       list_state: ListState::default(),
       search: SearchInput::new(),
+      search_filter: None,
     }
   }
 
@@ -49,18 +51,39 @@ impl BoardListView {
     self.query.data().map(|v| v.as_slice()).unwrap_or(&[])
   }
 
+  fn filtered_boards(&self) -> Vec<&Board> {
+    let boards = self.boards();
+    let Some(query) = &self.search_filter else {
+      return boards.iter().collect();
+    };
+    let query_lower = query.to_lowercase();
+    boards
+      .iter()
+      .filter(|board| {
+        board.name.to_lowercase().contains(&query_lower)
+          || board.board_type.to_lowercase().contains(&query_lower)
+      })
+      .collect()
+  }
+
   fn is_loading(&self) -> bool {
     self.query.is_loading()
   }
 
   fn render_list(&mut self, frame: &mut Frame, area: Rect) {
-    let len = self.boards().len();
+    let len = self.filtered_boards().len();
     ensure_valid_selection(&mut self.list_state, len);
+
+    let search_indicator = self
+      .search_filter
+      .as_ref()
+      .map(|q| format!(" [/{}]", q))
+      .unwrap_or_default();
 
     let title = match self.query.state() {
       QueryState::Loading => " Boards (loading...) ".to_string(),
       QueryState::Error(e) => format!(" Boards (error: {}) ", e),
-      _ => format!(" Boards ({}) ", self.boards().len()),
+      _ => format!(" Boards ({}){} ", len, search_indicator),
     };
 
     let block = Block::default()
@@ -84,7 +107,7 @@ impl BoardListView {
 
     // Collect items first to avoid borrow conflicts with list_state
     let items: Vec<ListItem> = self
-      .boards()
+      .filtered_boards()
       .iter()
       .map(|board| {
         let line = Line::from(vec![
@@ -117,11 +140,12 @@ impl BoardListView {
   fn handle_overlays(&mut self, key: KeyEvent) -> Option<ViewAction> {
     match self.search.handle_key(key) {
       KeyResult::Handled => Some(ViewAction::None),
-      KeyResult::Event(SearchEvent::Submitted(_query)) => {
-        // TODO: Apply filter
+      KeyResult::Event(SearchEvent::Changed(query)) => {
+        self.search_filter = if query.is_empty() { None } else { Some(query) };
+        self.list_state.select(Some(0));
         Some(ViewAction::None)
       }
-      KeyResult::Event(SearchEvent::Cancelled) => Some(ViewAction::None),
+      KeyResult::Event(SearchEvent::Submitted) => Some(ViewAction::None),
       KeyResult::NotHandled => None,
     }
   }
@@ -148,7 +172,7 @@ impl BoardListView {
       }
       KeyCode::Enter => {
         if let Some(idx) = self.list_state.selected() {
-          if let Some(board) = self.boards().get(idx) {
+          if let Some(board) = self.filtered_boards().get(idx) {
             return Some(ViewAction::Push(Box::new(BoardView::new(
               board.id,
               board.name.clone(),

@@ -7,10 +7,10 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 /// Events emitted by search input that parent needs to handle
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchEvent {
-  /// Search submitted with query
-  Submitted(String),
-  /// Search cancelled
-  Cancelled,
+  /// Search query changed (emitted on each keystroke, empty string on cancel)
+  Changed(String),
+  /// Search submitted (overlay closed, filter persists)
+  Submitted,
 }
 
 /// Search input component with activation/deactivation
@@ -55,16 +55,18 @@ impl SearchInput {
 
     // Active - delegate to TextInput
     match self.input.handle_key(key) {
-      InputResult::Submitted(query) => {
+      InputResult::Submitted(_) => {
         self.active = false;
-        KeyResult::Event(SearchEvent::Submitted(query))
+        KeyResult::Event(SearchEvent::Submitted)
       }
       InputResult::Cancelled => {
         self.active = false;
         self.input.clear();
-        KeyResult::Event(SearchEvent::Cancelled)
+        KeyResult::Event(SearchEvent::Changed(String::new()))
       }
-      InputResult::Consumed => KeyResult::Handled,
+      InputResult::Consumed => {
+        KeyResult::Event(SearchEvent::Changed(self.input.value().to_string()))
+      }
       InputResult::NotHandled => KeyResult::NotHandled,
     }
   }
