@@ -1,7 +1,7 @@
 use crate::jira::client::JiraClient;
 use crate::jira::types::IssueSummary;
 use crate::query::{Query, QueryState};
-use crate::ui::components::{SearchInput, SearchResult};
+use crate::ui::components::{KeyResult, SearchEvent, SearchInput};
 use crate::ui::ensure_valid_selection;
 use crate::ui::renderfns::{status_color, truncate};
 use crate::ui::view::{View, ViewAction};
@@ -128,47 +128,64 @@ impl IssueListView {
 
     frame.render_stateful_widget(list, area, &mut self.list_state);
   }
-}
 
-impl View for IssueListView {
-  fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
-    // Let search component try to handle first
+  // Key handling helpers for or_else chain pattern
+  fn handle_overlays(&mut self, key: KeyEvent) -> Option<ViewAction> {
     match self.search.handle_key(key) {
-      SearchResult::Active => return ViewAction::None,
-      SearchResult::Submitted(_query) => {
+      KeyResult::Handled => Some(ViewAction::None),
+      KeyResult::Event(SearchEvent::Submitted(_query)) => {
         // TODO: Apply filter
-        return ViewAction::None;
+        Some(ViewAction::None)
       }
-      SearchResult::Cancelled => return ViewAction::None,
-      SearchResult::NotHandled => {}
+      KeyResult::Event(SearchEvent::Cancelled) => Some(ViewAction::None),
+      KeyResult::NotHandled => None,
     }
+  }
 
-    // Normal mode key handling
+  fn handle_navigation(&mut self, key: KeyEvent) -> Option<ViewAction> {
     match key.code {
       KeyCode::Char('j') | KeyCode::Down => {
         self.list_state.select_next();
+        Some(ViewAction::None)
       }
       KeyCode::Char('k') | KeyCode::Up => {
         self.list_state.select_previous();
+        Some(ViewAction::None)
       }
+      _ => None,
+    }
+  }
+
+  fn handle_actions(&mut self, key: KeyEvent) -> Option<ViewAction> {
+    match key.code {
       KeyCode::Char('r') => {
-        // Refresh
         self.query.refetch();
+        Some(ViewAction::None)
       }
       KeyCode::Enter => {
         if let Some(idx) = self.list_state.selected() {
           if let Some(issue) = self.issues().get(idx) {
-            return ViewAction::Push(Box::new(IssueDetailView::new(
+            return Some(ViewAction::Push(Box::new(IssueDetailView::new(
               issue.key.clone(),
               self.jira.clone(),
-            )));
+            ))));
           }
         }
+        None
       }
-      KeyCode::Char('q') | KeyCode::Esc => return ViewAction::Pop,
-      _ => {}
+      KeyCode::Char('q') | KeyCode::Esc => Some(ViewAction::Pop),
+      _ => None,
     }
-    ViewAction::None
+  }
+}
+
+impl View for IssueListView {
+  fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
+    self
+      .handle_overlays(key)
+      .or_else(|| self.handle_navigation(key))
+      .or_else(|| self.handle_actions(key))
+      .unwrap_or(ViewAction::None)
   }
 
   fn render(&mut self, frame: &mut Frame, area: Rect) {

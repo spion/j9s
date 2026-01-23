@@ -102,18 +102,23 @@ impl IssueDetailView {
       .style(Style::default());
     frame.render_widget(desc_para, chunks[2]);
   }
+
+  // Key handling helper for or_else chain pattern (consistency with other views)
+  fn handle_actions(&mut self, key: KeyEvent) -> Option<ViewAction> {
+    match key.code {
+      KeyCode::Char('r') => {
+        self.query.refetch();
+        Some(ViewAction::None)
+      }
+      KeyCode::Char('q') | KeyCode::Esc => Some(ViewAction::Pop),
+      _ => None,
+    }
+  }
 }
 
 impl View for IssueDetailView {
   fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
-    match key.code {
-      KeyCode::Char('r') => {
-        self.query.refetch();
-        ViewAction::None
-      }
-      KeyCode::Char('q') | KeyCode::Esc => ViewAction::Pop,
-      _ => ViewAction::None,
-    }
+    self.handle_actions(key).unwrap_or(ViewAction::None)
   }
 
   fn render(&mut self, frame: &mut Frame, area: Rect) {

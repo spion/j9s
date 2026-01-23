@@ -1,19 +1,16 @@
 use super::input::{InputResult, TextInput};
+use super::KeyResult;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-/// Result of handling a key in search mode
+/// Events emitted by search input that parent needs to handle
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SearchResult {
-  /// Still in search mode, key was handled
-  Active,
+pub enum SearchEvent {
   /// Search submitted with query
   Submitted(String),
   /// Search cancelled
   Cancelled,
-  /// Key not handled (pass to parent)
-  NotHandled,
 }
 
 /// Search input component with activation/deactivation
@@ -46,29 +43,29 @@ impl SearchInput {
 
   /// Handle a key event
   /// Call this regardless of active state - it handles activation too
-  pub fn handle_key(&mut self, key: KeyEvent) -> SearchResult {
+  pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult<SearchEvent> {
     // If not active, check for activation key
     if !self.active {
       if key.code == KeyCode::Char('/') {
         self.activate();
-        return SearchResult::Active;
+        return KeyResult::Handled;
       }
-      return SearchResult::NotHandled;
+      return KeyResult::NotHandled;
     }
 
     // Active - delegate to TextInput
     match self.input.handle_key(key) {
       InputResult::Submitted(query) => {
         self.active = false;
-        SearchResult::Submitted(query)
+        KeyResult::Event(SearchEvent::Submitted(query))
       }
       InputResult::Cancelled => {
         self.active = false;
         self.input.clear();
-        SearchResult::Cancelled
+        KeyResult::Event(SearchEvent::Cancelled)
       }
-      InputResult::Consumed => SearchResult::Active,
-      InputResult::NotHandled => SearchResult::NotHandled,
+      InputResult::Consumed => KeyResult::Handled,
+      InputResult::NotHandled => KeyResult::NotHandled,
     }
   }
 

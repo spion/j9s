@@ -1,20 +1,17 @@
 use super::input::{InputResult, TextInput};
+use super::KeyResult;
 use crate::commands::{self, Command};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-/// Result of handling a key in command mode
+/// Events emitted by command input that parent needs to handle
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CommandResult {
-  /// Still in command mode, key was handled
-  Active,
+pub enum CommandEvent {
   /// Command submitted
   Submitted(String),
   /// Command cancelled
   Cancelled,
-  /// Key not handled (pass to parent)
-  NotHandled,
 }
 
 /// Command input component with autocomplete
@@ -59,14 +56,14 @@ impl CommandInput {
 
   /// Handle a key event
   /// Call this regardless of active state - it handles activation too
-  pub fn handle_key(&mut self, key: KeyEvent) -> CommandResult {
+  pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult<CommandEvent> {
     // If not active, check for activation key
     if !self.active {
       if key.code == KeyCode::Char(':') {
         self.activate();
-        return CommandResult::Active;
+        return KeyResult::Handled;
       }
-      return CommandResult::NotHandled;
+      return KeyResult::NotHandled;
     }
 
     // Active - handle command-specific keys first
@@ -75,21 +72,21 @@ impl CommandInput {
         self.active = false;
         self.input.clear();
         self.selected_suggestion = 0;
-        return CommandResult::Cancelled;
+        return KeyResult::Event(CommandEvent::Cancelled);
       }
       KeyCode::Enter => {
         self.active = false;
         let cmd = self.resolve_command();
         self.input.clear();
         self.selected_suggestion = 0;
-        return CommandResult::Submitted(cmd);
+        return KeyResult::Event(CommandEvent::Submitted(cmd));
       }
       KeyCode::Tab | KeyCode::Down => {
         let suggestions = self.suggestions();
         if !suggestions.is_empty() {
           self.selected_suggestion = (self.selected_suggestion + 1) % suggestions.len();
         }
-        return CommandResult::Active;
+        return KeyResult::Handled;
       }
       KeyCode::BackTab | KeyCode::Up => {
         let suggestions = self.suggestions();
@@ -100,7 +97,7 @@ impl CommandInput {
             self.selected_suggestion - 1
           };
         }
-        return CommandResult::Active;
+        return KeyResult::Handled;
       }
       _ => {}
     }
@@ -109,13 +106,13 @@ impl CommandInput {
     match self.input.handle_key(key) {
       InputResult::Consumed => {
         self.selected_suggestion = 0; // Reset on input change
-        CommandResult::Active
+        KeyResult::Handled
       }
       InputResult::Submitted(_) | InputResult::Cancelled => {
         // Already handled above
-        CommandResult::Active
+        KeyResult::Handled
       }
-      InputResult::NotHandled => CommandResult::NotHandled,
+      InputResult::NotHandled => KeyResult::NotHandled,
     }
   }
 

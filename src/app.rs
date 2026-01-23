@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::event::{Event, EventHandler};
 use crate::jira::client::JiraClient;
 use crate::ui;
-use crate::ui::components::{CommandInput, CommandResult};
+use crate::ui::components::{CommandEvent, CommandInput, KeyResult};
 use crate::ui::view::{Shortcut, View, ViewAction};
 use crate::ui::views::{BoardListView, IssueListView};
 use color_eyre::Result;
@@ -93,13 +93,13 @@ impl App {
   fn handle_key(&mut self, key: KeyEvent) {
     // Let command component try to handle first
     match self.command.handle_key(key) {
-      CommandResult::Active => return,
-      CommandResult::Submitted(cmd) => {
+      KeyResult::Handled => return,
+      KeyResult::Event(CommandEvent::Submitted(cmd)) => {
         self.execute_command(&cmd);
         return;
       }
-      CommandResult::Cancelled => return,
-      CommandResult::NotHandled => {}
+      KeyResult::Event(CommandEvent::Cancelled) => return,
+      KeyResult::NotHandled => {}
     }
 
     // Ctrl+C always quits

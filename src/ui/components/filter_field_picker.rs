@@ -1,3 +1,4 @@
+use super::KeyResult;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
@@ -25,17 +26,13 @@ impl FilterField {
   }
 }
 
-/// Result of handling a key in filter field picker
+/// Events emitted by filter field picker that parent needs to handle
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FilterFieldPickerResult {
-  /// Still in picker mode, key was handled
-  Active,
+pub enum FilterFieldPickerEvent {
   /// Field selected
   Selected(FilterField),
   /// Picker cancelled
   Cancelled,
-  /// Key not handled (pass to parent)
-  NotHandled,
 }
 
 /// Filter field picker component for selecting which field to group/filter by
@@ -68,24 +65,24 @@ impl FilterFieldPicker {
   }
 
   /// Handle a key event
-  pub fn handle_key(&mut self, key: KeyEvent) -> FilterFieldPickerResult {
+  pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult<FilterFieldPickerEvent> {
     if !self.active {
-      return FilterFieldPickerResult::NotHandled;
+      return KeyResult::NotHandled;
     }
 
     match key.code {
       KeyCode::Esc | KeyCode::Char('q') => {
         self.hide();
-        FilterFieldPickerResult::Cancelled
+        KeyResult::Event(FilterFieldPickerEvent::Cancelled)
       }
       KeyCode::Enter => {
         let fields = FilterField::all();
         if let Some(&field) = fields.get(self.selected) {
           self.hide();
-          FilterFieldPickerResult::Selected(field)
+          KeyResult::Event(FilterFieldPickerEvent::Selected(field))
         } else {
           self.hide();
-          FilterFieldPickerResult::Cancelled
+          KeyResult::Event(FilterFieldPickerEvent::Cancelled)
         }
       }
       KeyCode::Char('j') | KeyCode::Down => {
@@ -93,7 +90,7 @@ impl FilterFieldPicker {
         if !fields.is_empty() {
           self.selected = (self.selected + 1) % fields.len();
         }
-        FilterFieldPickerResult::Active
+        KeyResult::Handled
       }
       KeyCode::Char('k') | KeyCode::Up => {
         let fields = FilterField::all();
@@ -104,9 +101,9 @@ impl FilterFieldPicker {
             self.selected - 1
           };
         }
-        FilterFieldPickerResult::Active
+        KeyResult::Handled
       }
-      _ => FilterFieldPickerResult::Active,
+      _ => KeyResult::Handled,
     }
   }
 

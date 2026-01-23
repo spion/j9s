@@ -1,19 +1,16 @@
+use super::KeyResult;
 use crate::jira::types::StatusInfo;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
 
-/// Result of handling a key in status picker
+/// Events emitted by status picker that parent needs to handle
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StatusPickerResult {
-  /// Still in picker mode, key was handled
-  Active,
+pub enum StatusPickerEvent {
   /// Status selected (returns status id)
   Selected(String),
   /// Picker cancelled
   Cancelled,
-  /// Key not handled (pass to parent)
-  NotHandled,
 }
 
 /// Status picker component for selecting target status in swimlane transitions
@@ -51,31 +48,31 @@ impl StatusPicker {
   }
 
   /// Handle a key event
-  pub fn handle_key(&mut self, key: KeyEvent) -> StatusPickerResult {
+  pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult<StatusPickerEvent> {
     if !self.active {
-      return StatusPickerResult::NotHandled;
+      return KeyResult::NotHandled;
     }
 
     match key.code {
       KeyCode::Esc | KeyCode::Char('q') => {
         self.hide();
-        StatusPickerResult::Cancelled
+        KeyResult::Event(StatusPickerEvent::Cancelled)
       }
       KeyCode::Enter => {
         if let Some(status) = self.statuses.get(self.selected) {
           let id = status.id.clone();
           self.hide();
-          StatusPickerResult::Selected(id)
+          KeyResult::Event(StatusPickerEvent::Selected(id))
         } else {
           self.hide();
-          StatusPickerResult::Cancelled
+          KeyResult::Event(StatusPickerEvent::Cancelled)
         }
       }
       KeyCode::Char('j') | KeyCode::Down => {
         if !self.statuses.is_empty() {
           self.selected = (self.selected + 1) % self.statuses.len();
         }
-        StatusPickerResult::Active
+        KeyResult::Handled
       }
       KeyCode::Char('k') | KeyCode::Up => {
         if !self.statuses.is_empty() {
@@ -85,9 +82,9 @@ impl StatusPicker {
             self.selected - 1
           };
         }
-        StatusPickerResult::Active
+        KeyResult::Handled
       }
-      _ => StatusPickerResult::Active,
+      _ => KeyResult::Handled,
     }
   }
 
