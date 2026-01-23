@@ -38,7 +38,6 @@ impl SearchInput {
   /// Activate search mode
   pub fn activate(&mut self) {
     self.active = true;
-    self.input.clear();
   }
 
   /// Handle a key event
