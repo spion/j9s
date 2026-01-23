@@ -58,7 +58,11 @@ impl FilterBar {
   pub fn update_values(&mut self, values: Vec<Option<String>>) {
     self.values = values;
     // Clamp selection to valid range
-    let max_selection = if self.values.is_empty() { 0 } else { self.values.len() };
+    let max_selection = if self.values.is_empty() {
+      0
+    } else {
+      self.values.len()
+    };
     if self.selected > max_selection {
       self.selected = 0;
     }

@@ -22,9 +22,13 @@ src/ui/
 ├── mod.rs           # Main draw function
 ├── view.rs          # View trait and ViewAction enum
 ├── components/      # Stateful components with co-located rendering
-│   ├── input.rs         # TextInput - base input component
-│   ├── search_input.rs  # SearchInput - wraps TextInput, renders overlay
-│   └── command_input.rs # CommandInput - wraps TextInput + autocomplete
+│   ├── key_result.rs        # KeyResult<T> enum for key handling
+│   ├── input.rs             # TextInput - base input component
+│   ├── search_input.rs      # SearchInput - wraps TextInput, renders overlay
+│   ├── command_input.rs     # CommandInput - wraps TextInput + autocomplete
+│   ├── filter_bar.rs        # FilterBar - tab-based filter selection
+│   ├── filter_field_picker.rs # FilterFieldPicker - filter field selector
+│   └── status_picker.rs     # StatusPicker - status selection overlay
 ├── views/           # View structs with co-located rendering
 │   ├── issue_list.rs    # IssueListView
 │   ├── issue_detail.rs  # IssueDetailView
@@ -39,11 +43,55 @@ src/ui/
 
 - **App** owns command mode (`:` prefix), delegates to current view
 - **Views** own their modes (e.g. search with `/`), implement `View` trait
-- **Components** are reusable input handlers (TextInput, SearchInput, CommandInput)
+- **Components** are reusable input handlers with `KeyResult<T>` pattern
 - **renderfns** are stateless - just take data and render, no state
 
 When adding a new view: create in `ui/views/`, implement `View` trait, co-locate rendering.
 When adding a new component: create in `ui/components/`, co-locate rendering with the component.
+
+## Component Key Handling with KeyResult<T>
+
+Components use `KeyResult<T>` for consistent key event handling:
+
+```rust
+pub enum KeyResult<T> {
+  Handled,      // Key consumed, no event for parent
+  Event(T),     // Key consumed, here's an event for parent
+  NotHandled,   // Key not consumed, try next handler
+}
+```
+
+Each component defines its own event enum (e.g. `FilterBarEvent`, `SearchEvent`).
+
+**Views use or_else chains** to delegate keys through the component stack:
+
+```rust
+fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
+  self
+    .handle_overlays(key)
+    .or_else(|| self.handle_navigation(key))
+    .or_else(|| self.handle_toggles(key))
+    .or_else(|| self.handle_actions(key))
+    .unwrap_or(ViewAction::None)
+}
+
+fn handle_overlays(&mut self, key: KeyEvent) -> Option<ViewAction> {
+  match self.search.handle_key(key) {
+    KeyResult::Handled => return Some(ViewAction::None),
+    KeyResult::Event(SearchEvent::Submitted(q)) => { /* use q */ }
+    KeyResult::Event(SearchEvent::Cancelled) => return Some(ViewAction::None),
+    KeyResult::NotHandled => {}
+  }
+  // ... more components
+  None
+}
+```
+
+**When adding a new component:**
+1. Define an event enum: `pub enum FooEvent { Selected(T), Cancelled }`
+2. Implement `handle_key(&mut self, key: KeyEvent) -> KeyResult<FooEvent>`
+3. Component returns `NotHandled` when inactive, handles keys when active
+4. Parent view matches on the result in its `handle_overlays` method
 
 ## Navigation
 
