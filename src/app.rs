@@ -1,4 +1,6 @@
+use crate::cache::{CacheLayer, SqliteStorage};
 use crate::config::Config;
+use crate::db;
 use crate::event::{Event, EventHandler};
 use crate::jira::JiraClient;
 use crate::ui;
@@ -35,7 +37,10 @@ pub struct App {
 
 impl App {
   pub async fn new(config: Config) -> Result<Self> {
-    let jira = JiraClient::new(&config)?;
+    let conn = db::open_connection()?;
+    let cache_storage = SqliteStorage::new(conn)?;
+    let cache = CacheLayer::new(cache_storage);
+    let jira = JiraClient::new(&config, cache)?;
 
     let default_project = config.default_project.clone().unwrap_or_default();
 

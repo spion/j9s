@@ -77,7 +77,7 @@ impl JiraClient {
     }
   }
 
-  pub fn new(config: &Config) -> Result<Self> {
+  pub fn new(config: &Config, cache: CacheLayer<SqliteStorage>) -> Result<Self> {
     let auth_type = Self::resolve_auth_type(config.jira.auth_type, &config.jira.url);
     let credentials = Self::get_credentials(auth_type, &config.jira.email)?;
 
@@ -89,9 +89,6 @@ impl JiraClient {
 
     let client = gouqi::r#async::Jira::from_client(&config.jira.url, credentials, http_client)
       .map_err(|e| eyre!("Failed to create Jira client: {}", e))?;
-
-    let storage = SqliteStorage::open()?;
-    let cache = CacheLayer::new(storage);
 
     Ok(Self {
       client,

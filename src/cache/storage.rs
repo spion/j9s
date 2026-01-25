@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use color_eyre::{eyre::eyre, Result};
 use rusqlite::{params, Connection};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::traits::Cacheable;
 
@@ -79,39 +79,18 @@ impl CacheStorage for NoopStorage {
 }
 
 /// SQLite-based cache storage implementation.
+#[derive(Clone)]
 pub struct SqliteStorage {
-  conn: Mutex<Connection>,
+  conn: Arc<Mutex<Connection>>,
 }
 
 impl SqliteStorage {
-  /// Create a new SQLite storage at the default location.
-  pub fn open() -> Result<Self> {
-    let path = Self::default_path()?;
-
-    // Ensure parent directory exists
-    if let Some(parent) = path.parent() {
-      std::fs::create_dir_all(parent)
-        .map_err(|e| eyre!("Failed to create cache directory: {}", e))?;
-    }
-
-    let conn = Connection::open(&path)
-      .map_err(|e| eyre!("Failed to open cache database at {}: {}", path.display(), e))?;
-
-    let storage = Self {
-      conn: Mutex::new(conn),
-    };
+  /// Create a new SQLite storage using the provided connection.
+  /// Runs migrations on initialization.
+  pub fn new(conn: Arc<Mutex<Connection>>) -> Result<Self> {
+    let storage = Self { conn };
     storage.run_migrations()?;
-
     Ok(storage)
-  }
-
-  /// Get the default database path.
-  fn default_path() -> Result<std::path::PathBuf> {
-    let data_dir = dirs::data_dir()
-      .or_else(|| dirs::home_dir().map(|p| p.join(".local/share")))
-      .ok_or_else(|| eyre!("Could not determine data directory"))?;
-
-    Ok(data_dir.join("j9s").join("cache.db"))
   }
 
   /// Run database migrations for cache tables.
