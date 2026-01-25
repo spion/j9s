@@ -1,5 +1,5 @@
-use crate::jira::client::JiraClient;
 use crate::jira::types::Board;
+use crate::jira::CachedJiraClient;
 use crate::query::{Query, QueryState};
 use crate::ui::components::{KeyResult, SearchEvent, SearchInput};
 use crate::ui::ensure_valid_selection;
@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 
 /// View for displaying a list of boards
 pub struct BoardListView {
-  jira: JiraClient,
+  jira: CachedJiraClient,
   hide_swimlanes: BTreeSet<String>,
   query: Query<Vec<Board>>,
   list_state: ListState,
@@ -21,7 +21,11 @@ pub struct BoardListView {
 }
 
 impl BoardListView {
-  pub fn new(project: Option<String>, jira: JiraClient, hide_swimlanes: BTreeSet<String>) -> Self {
+  pub fn new(
+    project: Option<String>,
+    jira: CachedJiraClient,
+    hide_swimlanes: BTreeSet<String>,
+  ) -> Self {
     let jira_for_query = jira.clone();
     let mut query = Query::new(move || {
       let jira = jira_for_query.clone();

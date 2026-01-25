@@ -165,6 +165,7 @@ impl ApiIssue {
       assignee: f.assignee.map(|u| u.display_name),
       priority: f.priority.map(|p| p.name),
       epic,
+      updated: f.updated,
     }
   }
 

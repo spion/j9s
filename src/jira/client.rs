@@ -16,7 +16,14 @@ pub struct JiraClient {
 }
 
 fn get_issue_fields(epic_field: Option<&str>) -> Vec<&str> {
-  let mut fields = vec!["summary", "status", "issuetype", "assignee", "priority"];
+  let mut fields = vec![
+    "summary",
+    "status",
+    "issuetype",
+    "assignee",
+    "priority",
+    "updated",
+  ];
   if let Some(epic_field) = epic_field {
     fields.push(epic_field);
   }

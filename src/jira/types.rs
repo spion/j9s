@@ -1,5 +1,5 @@
 /// Summary of an issue for list views
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IssueSummary {
   pub key: String,
   pub summary: String,
@@ -9,10 +9,11 @@ pub struct IssueSummary {
   pub assignee: Option<String>,
   pub priority: Option<String>,
   pub epic: Option<String>,
+  pub updated: String,
 }
 
 /// Full issue details
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Issue {
   pub key: String,
   pub summary: String,
@@ -29,7 +30,7 @@ pub struct Issue {
 }
 
 /// Board summary
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Board {
   pub id: u64,
   pub name: String,
