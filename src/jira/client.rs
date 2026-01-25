@@ -1,3 +1,4 @@
+use crate::cache::{CacheLayer, SqliteStorage};
 use crate::config::{AuthType, Config};
 use crate::jira::api_types::{
   reserialize, ApiBoardConfigResponse, ApiBoardIssuesResponse, ApiIssue, ApiIssueFields,
@@ -8,11 +9,15 @@ use color_eyre::{eyre::eyre, Result};
 use serde_json::Value;
 use url::form_urlencoded;
 
-/// Jira API client wrapper
+/// Jira API client with transparent caching support.
+///
+/// This client provides the Jira API and automatically caches results
+/// for offline support and improved performance.
 #[derive(Clone)]
 pub struct JiraClient {
   client: gouqi::r#async::Jira,
   epic_field: Option<String>,
+  cache: CacheLayer<SqliteStorage>,
 }
 
 fn get_issue_fields(epic_field: Option<&str>) -> Vec<&str> {
@@ -85,14 +90,40 @@ impl JiraClient {
     let client = gouqi::r#async::Jira::from_client(&config.jira.url, credentials, http_client)
       .map_err(|e| eyre!("Failed to create Jira client: {}", e))?;
 
+    let storage = SqliteStorage::open()?;
+    let cache = CacheLayer::new(storage);
+
     Ok(Self {
       client,
       epic_field: config.jira.epic_field.clone(),
+      cache,
     })
   }
 
-  /// Search for issues using JQL
+  /// Search for issues using JQL with caching and incremental updates.
   pub async fn search_issues(&self, jql: &str) -> Result<Vec<IssueSummary>> {
+    let cache_key = format!("search:{}", jql.trim().to_lowercase());
+    let base_jql = jql.to_string();
+    let client = self.clone();
+
+    let result = self
+      .cache
+      .fetch_incremental(&cache_key, move |updated_since| {
+        let effective_jql = if let Some(since) = updated_since {
+          format!("({}) AND updated > '{}'", base_jql, since)
+        } else {
+          base_jql.clone()
+        };
+        let client = client.clone();
+        async move { client.search_issues_raw(&effective_jql).await }
+      })
+      .await?;
+
+    Ok(result.data)
+  }
+
+  /// Raw search without caching
+  async fn search_issues_raw(&self, jql: &str) -> Result<Vec<IssueSummary>> {
     use futures::{StreamExt, TryStreamExt};
 
     let search = self.client.search();
@@ -126,8 +157,25 @@ impl JiraClient {
     Ok(issues)
   }
 
-  /// Get a single issue by key
+  /// Get a single issue by key with caching.
   pub async fn get_issue(&self, key: &str) -> Result<Issue> {
+    let key_owned = key.to_string();
+    let client = self.clone();
+
+    let result = self
+      .cache
+      .fetch_one(key, move || {
+        let key = key_owned.clone();
+        let client = client.clone();
+        async move { client.get_issue_raw(&key).await }
+      })
+      .await?;
+
+    Ok(result.data)
+  }
+
+  /// Raw get issue without caching
+  async fn get_issue_raw(&self, key: &str) -> Result<Issue> {
     let issues = self.client.issues();
 
     let issue = issues
@@ -147,8 +195,26 @@ impl JiraClient {
     )
   }
 
-  /// Get all boards, optionally filtered by project
+  /// Get all boards with caching, optionally filtered by project.
   pub async fn get_boards(&self, project: Option<&str>) -> Result<Vec<Board>> {
+    let cache_key = format!("boards:{}", project.unwrap_or(""));
+    let project_owned = project.map(String::from);
+    let client = self.clone();
+
+    let result = self
+      .cache
+      .fetch_list(&cache_key, move || {
+        let project = project_owned.clone();
+        let client = client.clone();
+        async move { client.get_boards_raw(project.as_deref()).await }
+      })
+      .await?;
+
+    Ok(result.data)
+  }
+
+  /// Raw get boards without caching
+  async fn get_boards_raw(&self, project: Option<&str>) -> Result<Vec<Board>> {
     use futures::StreamExt;
 
     let boards_api = self.client.boards();
@@ -175,8 +241,43 @@ impl JiraClient {
     Ok(boards)
   }
 
-  /// Get issues for a specific board
+  /// Get issues for a specific board with caching and incremental updates.
   pub async fn get_board_issues(
+    &self,
+    board_id: u64,
+    jql: Option<&str>,
+  ) -> Result<Vec<IssueSummary>> {
+    let cache_key = format!(
+      "board_issues:{}:{}",
+      board_id,
+      jql.map(|j| j.trim().to_lowercase()).unwrap_or_default()
+    );
+    let base_jql = jql.map(String::from);
+    let client = self.clone();
+
+    let result = self
+      .cache
+      .fetch_incremental(&cache_key, move |updated_since| {
+        let effective_jql = match (&base_jql, updated_since) {
+          (Some(base), Some(since)) => Some(format!("({}) AND updated > '{}'", base, since)),
+          (Some(base), None) => Some(base.clone()),
+          (None, Some(since)) => Some(format!("updated > '{}'", since)),
+          (None, None) => None,
+        };
+        let client = client.clone();
+        async move {
+          client
+            .get_board_issues_raw(board_id, effective_jql.as_deref())
+            .await
+        }
+      })
+      .await?;
+
+    Ok(result.data)
+  }
+
+  /// Raw get board issues without caching
+  async fn get_board_issues_raw(
     &self,
     board_id: u64,
     jql: Option<&str>,

@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::event::{Event, EventHandler};
-use crate::jira::CachedJiraClient;
+use crate::jira::JiraClient;
 use crate::ui;
 use crate::ui::components::{CommandEvent, CommandInput, KeyResult};
 use crate::ui::view::{Shortcut, View, ViewAction};
@@ -27,7 +27,7 @@ pub struct App {
   config: Config,
 
   /// Jira client (with caching)
-  jira: CachedJiraClient,
+  jira: JiraClient,
 
   /// Whether to quit
   should_quit: bool,
@@ -35,7 +35,7 @@ pub struct App {
 
 impl App {
   pub async fn new(config: Config) -> Result<Self> {
-    let jira = CachedJiraClient::new(&config)?;
+    let jira = JiraClient::new(&config)?;
 
     let default_project = config.default_project.clone().unwrap_or_default();
 

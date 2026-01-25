@@ -1,5 +1,5 @@
 use crate::jira::types::IssueSummary;
-use crate::jira::CachedJiraClient;
+use crate::jira::JiraClient;
 use crate::query::{Query, QueryState};
 use crate::ui::components::{KeyResult, SearchEvent, SearchInput};
 use crate::ui::ensure_valid_selection;
@@ -12,7 +12,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 /// View for displaying a list of issues
 pub struct IssueListView {
-  jira: CachedJiraClient,
+  jira: JiraClient,
   project: String,
   query: Query<Vec<IssueSummary>>,
   list_state: ListState,
@@ -21,7 +21,7 @@ pub struct IssueListView {
 }
 
 impl IssueListView {
-  pub fn new(project: String, jira: CachedJiraClient) -> Self {
+  pub fn new(project: String, jira: JiraClient) -> Self {
     let jql = if project.is_empty() {
       String::new()
     } else {

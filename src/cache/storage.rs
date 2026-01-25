@@ -30,18 +30,10 @@ pub struct CachedEntity<T> {
 /// Trait for cache storage backends.
 pub trait CacheStorage: Send + Sync {
   /// Store entities from a query result.
-  fn store_query_result<T: Cacheable>(
-    &self,
-    query_hash: &str,
-    query_description: &str,
-    entities: &[T],
-  ) -> Result<()>;
+  fn store_query_result<T: Cacheable>(&self, key: &str, entities: &[T]) -> Result<()>;
 
   /// Get cached entities for a query.
-  fn get_query_result<T: Cacheable>(
-    &self,
-    query_hash: &str,
-  ) -> Result<Option<CachedQueryResult<T>>>;
+  fn get_query_result<T: Cacheable>(&self, key: &str) -> Result<Option<CachedQueryResult<T>>>;
 
   /// Get a single entity by key.
   fn get_entity<T: Cacheable>(&self, entity_key: &str) -> Result<Option<CachedEntity<T>>>;
@@ -50,15 +42,40 @@ pub trait CacheStorage: Send + Sync {
   fn store_entity<T: Cacheable>(&self, entity: &T) -> Result<()>;
 
   /// Get the max updated_at for incremental fetching.
-  fn get_max_updated(&self, query_hash: &str) -> Result<Option<String>>;
+  fn get_max_updated(&self, key: &str) -> Result<Option<String>>;
 
   /// Merge new entities into an existing query result (upsert by key).
-  fn merge_query_result<T: Cacheable>(
-    &self,
-    query_hash: &str,
-    query_description: &str,
-    new_entities: &[T],
-  ) -> Result<()>;
+  fn merge_query_result<T: Cacheable>(&self, key: &str, new_entities: &[T]) -> Result<()>;
+}
+
+/// Storage implementation that doesn't cache anything.
+/// Used when caching is disabled - all operations are no-ops.
+pub struct NoopStorage;
+
+impl CacheStorage for NoopStorage {
+  fn store_query_result<T: Cacheable>(&self, _key: &str, _entities: &[T]) -> Result<()> {
+    Ok(()) // Discard
+  }
+
+  fn get_query_result<T: Cacheable>(&self, _key: &str) -> Result<Option<CachedQueryResult<T>>> {
+    Ok(None) // Always miss
+  }
+
+  fn get_entity<T: Cacheable>(&self, _entity_key: &str) -> Result<Option<CachedEntity<T>>> {
+    Ok(None) // Always miss
+  }
+
+  fn store_entity<T: Cacheable>(&self, _entity: &T) -> Result<()> {
+    Ok(()) // Discard
+  }
+
+  fn get_max_updated(&self, _key: &str) -> Result<Option<String>> {
+    Ok(None) // No cached data
+  }
+
+  fn merge_query_result<T: Cacheable>(&self, _key: &str, _new_entities: &[T]) -> Result<()> {
+    Ok(()) // Discard
+  }
 }
 
 /// SQLite-based cache storage implementation.
@@ -150,12 +167,7 @@ CREATE INDEX IF NOT EXISTS idx_query_results_hash ON query_results(query_hash);
 "#;
 
 impl CacheStorage for SqliteStorage {
-  fn store_query_result<T: Cacheable>(
-    &self,
-    query_hash: &str,
-    query_description: &str,
-    entities: &[T],
-  ) -> Result<()> {
+  fn store_query_result<T: Cacheable>(&self, key: &str, entities: &[T]) -> Result<()> {
     let conn = self
       .conn
       .lock()
@@ -178,7 +190,7 @@ impl CacheStorage for SqliteStorage {
     conn
       .execute(
         "DELETE FROM query_results WHERE query_hash = ?",
-        params![query_hash],
+        params![key],
       )
       .map_err(|e| eyre!("Failed to delete old query results: {}", e))?;
 
@@ -187,13 +199,13 @@ impl CacheStorage for SqliteStorage {
       .execute(
         "INSERT OR REPLACE INTO query_cache (query_hash, query_description, entity_type, max_updated, cached_at, result_count)
          VALUES (?, ?, ?, ?, datetime('now'), ?)",
-        params![query_hash, query_description, entity_type, max_updated, entities.len()],
+        params![key, key, entity_type, max_updated, entities.len()],
       )
       .map_err(|e| eyre!("Failed to update query cache: {}", e))?;
 
     // Store entities and query results
     for (position, entity) in entities.iter().enumerate() {
-      let key = entity.cache_key();
+      let entity_key = entity.cache_key();
       let data =
         serde_json::to_vec(entity).map_err(|e| eyre!("Failed to serialize entity: {}", e))?;
       let updated_at = entity.updated_at();
@@ -203,7 +215,7 @@ impl CacheStorage for SqliteStorage {
         .execute(
           "INSERT OR REPLACE INTO entity_cache (entity_type, entity_key, data, updated_at, cached_at)
            VALUES (?, ?, ?, ?, datetime('now'))",
-          params![entity_type, key, data, updated_at],
+          params![entity_type, entity_key, data, updated_at],
         )
         .map_err(|e| eyre!("Failed to store entity: {}", e))?;
 
@@ -212,7 +224,7 @@ impl CacheStorage for SqliteStorage {
         .execute(
           "INSERT OR REPLACE INTO query_results (query_hash, entity_key, position)
            VALUES (?, ?, ?)",
-          params![query_hash, key, position],
+          params![key, entity_key, position],
         )
         .map_err(|e| eyre!("Failed to store query result: {}", e))?;
     }
@@ -350,12 +362,7 @@ impl CacheStorage for SqliteStorage {
     Ok(result.flatten())
   }
 
-  fn merge_query_result<T: Cacheable>(
-    &self,
-    query_hash: &str,
-    query_description: &str,
-    new_entities: &[T],
-  ) -> Result<()> {
+  fn merge_query_result<T: Cacheable>(&self, key: &str, new_entities: &[T]) -> Result<()> {
     let conn = self
       .conn
       .lock()
@@ -377,7 +384,7 @@ impl CacheStorage for SqliteStorage {
         .map_err(|e| eyre!("Failed to prepare entity query: {}", e))?;
 
       let entities: Vec<Vec<u8>> = stmt
-        .query_map(params![entity_type, query_hash], |row| row.get(0))
+        .query_map(params![entity_type, key], |row| row.get(0))
         .map_err(|e| eyre!("Failed to query entities: {}", e))?
         .filter_map(|r| r.ok())
         .collect();
@@ -392,11 +399,11 @@ impl CacheStorage for SqliteStorage {
 
     // Merge: update existing entities, add new ones
     for new_entity in new_entities {
-      let key = new_entity.cache_key();
-      if existing_keys.contains(&key) {
+      let entity_key = new_entity.cache_key();
+      if existing_keys.contains(&entity_key) {
         // Update existing entity in place
         for existing in &mut existing_entities {
-          if existing.cache_key() == key {
+          if existing.cache_key() == entity_key {
             *existing = new_entity.clone();
             break;
           }
@@ -404,7 +411,7 @@ impl CacheStorage for SqliteStorage {
       } else {
         // Add new entity at the beginning (most recent)
         existing_entities.insert(0, new_entity.clone());
-        existing_keys.insert(key);
+        existing_keys.insert(entity_key);
       }
     }
 
@@ -412,7 +419,7 @@ impl CacheStorage for SqliteStorage {
     drop(conn);
 
     // Store the merged result
-    self.store_query_result(query_hash, query_description, &existing_entities)
+    self.store_query_result(key, &existing_entities)
   }
 }
 

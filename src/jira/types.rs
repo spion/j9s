@@ -1,3 +1,5 @@
+use crate::cache::Cacheable;
+
 /// Summary of an issue for list views
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IssueSummary {
@@ -10,6 +12,20 @@ pub struct IssueSummary {
   pub priority: Option<String>,
   pub epic: Option<String>,
   pub updated: String,
+}
+
+impl Cacheable for IssueSummary {
+  fn cache_key(&self) -> String {
+    self.key.clone()
+  }
+
+  fn updated_at(&self) -> Option<&str> {
+    Some(&self.updated)
+  }
+
+  fn entity_type() -> &'static str {
+    "issue_summary"
+  }
 }
 
 /// Full issue details
@@ -29,12 +45,41 @@ pub struct Issue {
   pub updated: String,
 }
 
+impl Cacheable for Issue {
+  fn cache_key(&self) -> String {
+    self.key.clone()
+  }
+
+  fn updated_at(&self) -> Option<&str> {
+    Some(&self.updated)
+  }
+
+  fn entity_type() -> &'static str {
+    "issue"
+  }
+}
+
 /// Board summary
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Board {
   pub id: u64,
   pub name: String,
   pub board_type: String, // "scrum" or "kanban"
+}
+
+impl Cacheable for Board {
+  fn cache_key(&self) -> String {
+    self.id.to_string()
+  }
+
+  fn updated_at(&self) -> Option<&str> {
+    // Boards don't have an updated_at field
+    None
+  }
+
+  fn entity_type() -> &'static str {
+    "board"
+  }
 }
 
 /// Epic summary

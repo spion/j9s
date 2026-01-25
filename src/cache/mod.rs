@@ -12,4 +12,4 @@ mod traits;
 
 pub use layer::CacheLayer;
 pub use storage::SqliteStorage;
-pub use traits::{Cacheable, QueryKey};
+pub use traits::Cacheable;

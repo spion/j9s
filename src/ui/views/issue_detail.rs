@@ -1,5 +1,5 @@
 use crate::jira::types::Issue;
-use crate::jira::CachedJiraClient;
+use crate::jira::JiraClient;
 use crate::query::{Query, QueryState};
 use crate::ui::view::{Shortcut, View, ViewAction};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -13,7 +13,7 @@ pub struct IssueDetailView {
 }
 
 impl IssueDetailView {
-  pub fn new(key: String, jira: CachedJiraClient) -> Self {
+  pub fn new(key: String, jira: JiraClient) -> Self {
     let issue_key = key.clone();
     let mut query = Query::new(move || {
       let jira = jira.clone();

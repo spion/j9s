@@ -1,5 +1,5 @@
 use crate::jira::types::{BoardColumn, BoardConfiguration, IssueSummary, StatusInfo};
-use crate::jira::CachedJiraClient;
+use crate::jira::JiraClient;
 use crate::query::{Query, QueryState};
 use crate::ui::components::{
   FilterBar, FilterBarEvent, FilterField, FilterFieldPicker, FilterFieldPickerEvent, KeyResult,
@@ -29,7 +29,7 @@ pub struct BoardView {
   board_name: String,
 
   // Jira client for API calls
-  jira: CachedJiraClient,
+  jira: JiraClient,
 
   // Config: swimlane names to hide (lowercase for case-insensitive matching)
   hide_swimlanes: BTreeSet<String>,
@@ -62,7 +62,7 @@ impl BoardView {
   pub fn new(
     board_id: u64,
     board_name: String,
-    jira: CachedJiraClient,
+    jira: JiraClient,
     hide_swimlanes: BTreeSet<String>,
   ) -> Self {
     let jira_for_query = jira.clone();

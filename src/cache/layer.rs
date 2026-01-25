@@ -6,7 +6,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use super::storage::CacheStorage;
-use super::traits::{CacheResult, Cacheable, QueryKey};
+use super::traits::{CacheResult, Cacheable};
 
 /// Cache layer that manages caching logic and network fetching.
 ///
@@ -39,24 +39,22 @@ impl<S: CacheStorage> CacheLayer<S> {
     Utc::now() - cached_at > self.stale_time
   }
 
-  /// Fetch with cache-first strategy.
+  /// Fetch a list with cache-first strategy.
   ///
   /// 1. Check cache - if fresh, return immediately
   /// 2. If stale/missing, fetch from network
   /// 3. On network failure, return stale cache (offline mode)
   /// 4. Update cache with new data
-  pub async fn fetch<T, Q, F, Fut>(&self, query_key: &Q, fetcher: F) -> Result<CacheResult<Vec<T>>>
+  ///
+  /// The `key` parameter is used as the cache lookup key (e.g., "boards:PROJECT").
+  pub async fn fetch_list<T, F, Fut>(&self, key: &str, fetcher: F) -> Result<CacheResult<Vec<T>>>
   where
     T: Cacheable,
-    Q: QueryKey,
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<Vec<T>>>,
   {
-    let hash = query_key.cache_hash();
-    let description = query_key.description();
-
     // Check cache first
-    if let Some(cached) = self.storage.get_query_result::<T>(&hash)? {
+    if let Some(cached) = self.storage.get_query_result::<T>(key)? {
       if !self.is_stale(cached.cached_at) {
         // Cache is fresh, return immediately
         return Ok(CacheResult::from_cache(
@@ -70,9 +68,7 @@ impl<S: CacheStorage> CacheLayer<S> {
       match fetcher().await {
         Ok(data) => {
           // Update cache with fresh data
-          self
-            .storage
-            .store_query_result(&hash, &description, &data)?;
+          self.storage.store_query_result(key, &data)?;
           Ok(CacheResult::from_network(data))
         }
         Err(_) => {
@@ -83,9 +79,7 @@ impl<S: CacheStorage> CacheLayer<S> {
     } else {
       // No cache, must fetch from network
       let data = fetcher().await?;
-      self
-        .storage
-        .store_query_result(&hash, &description, &data)?;
+      self.storage.store_query_result(key, &data)?;
       Ok(CacheResult::from_network(data))
     }
   }
@@ -94,25 +88,24 @@ impl<S: CacheStorage> CacheLayer<S> {
   ///
   /// If we have cached data, only fetch entities updated since max_updated.
   /// Merge new entities into existing cache.
-  pub async fn fetch_incremental<T, Q, F, Fut>(
+  ///
+  /// The `key` parameter is used as the cache lookup key (e.g., "search:jql_query").
+  /// The fetcher receives `Option<&str>` containing the max updated_at timestamp from cache.
+  pub async fn fetch_incremental<T, F, Fut>(
     &self,
-    query_key: &Q,
+    key: &str,
     fetcher: F,
   ) -> Result<CacheResult<Vec<T>>>
   where
     T: Cacheable,
-    Q: QueryKey,
     F: FnOnce(Option<&str>) -> Fut,
     Fut: Future<Output = Result<Vec<T>>>,
   {
-    let hash = query_key.cache_hash();
-    let description = query_key.description();
-
     // Get max_updated from cache for incremental fetching
-    let max_updated = self.storage.get_max_updated(&hash)?;
+    let max_updated = self.storage.get_max_updated(key)?;
 
     // Check cache first
-    if let Some(cached) = self.storage.get_query_result::<T>(&hash)? {
+    if let Some(cached) = self.storage.get_query_result::<T>(key)? {
       if !self.is_stale(cached.cached_at) {
         // Cache is fresh, return immediately
         return Ok(CacheResult::from_cache(
@@ -127,19 +120,15 @@ impl<S: CacheStorage> CacheLayer<S> {
         Ok(new_entities) => {
           if new_entities.is_empty() {
             // No new data, but update cached_at timestamp
-            self
-              .storage
-              .store_query_result(&hash, &description, &cached.entities)?;
+            self.storage.store_query_result(key, &cached.entities)?;
             return Ok(CacheResult::from_cache(cached.entities, Utc::now(), false));
           }
 
           // Merge new entities into cache
-          self
-            .storage
-            .merge_query_result(&hash, &description, &new_entities)?;
+          self.storage.merge_query_result(key, &new_entities)?;
 
           // Get the merged result
-          if let Some(merged) = self.storage.get_query_result::<T>(&hash)? {
+          if let Some(merged) = self.storage.get_query_result::<T>(key)? {
             return Ok(CacheResult::from_network(merged.entities));
           }
 
@@ -154,9 +143,7 @@ impl<S: CacheStorage> CacheLayer<S> {
     } else {
       // No cache, must do full fetch (no updated_since filter)
       let data = fetcher(None).await?;
-      self
-        .storage
-        .store_query_result(&hash, &description, &data)?;
+      self.storage.store_query_result(key, &data)?;
       Ok(CacheResult::from_network(data))
     }
   }

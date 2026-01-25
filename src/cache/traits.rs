@@ -19,15 +19,6 @@ pub trait Cacheable: Clone + Send + Sync + Serialize + DeserializeOwned {
   fn entity_type() -> &'static str;
 }
 
-/// Trait for query identifiers that can be hashed for cache lookup.
-pub trait QueryKey: Clone + Send + Sync {
-  /// Stable hash for cache lookup.
-  fn cache_hash(&self) -> String;
-
-  /// Human-readable description for debugging.
-  fn description(&self) -> String;
-}
-
 /// Result from a cache operation, including data and metadata about the source.
 #[derive(Debug, Clone)]
 pub struct CacheResult<T> {
