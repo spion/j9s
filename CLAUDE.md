@@ -13,7 +13,8 @@
 - `src/config.rs` - XDG-compliant config loading
 - `src/ui/` - All UI code (see below)
 - `src/jira/` - Gouqi wrapper and types
-- `src/db/` - SQLite caching (not yet integrated)
+- `src/db/` - SQLite connection management
+- `src/cache/` - Generic caching layer (see below)
 
 ## UI Architecture
 
@@ -133,6 +134,47 @@ match self.query.state() {
 - App calls `tick()` on all views each tick to poll queries
 - No event routing needed - views are self-contained
 - Testable: create view with mock fetcher, call methods, check state
+
+## Caching with CacheLayer
+
+The `src/cache/` module provides transparent caching with offline support:
+
+```
+src/cache/
+├── mod.rs      # Module exports
+├── traits.rs   # Cacheable trait, CacheResult<T>, CacheSource
+├── layer.rs    # CacheLayer<S> - orchestrates caching logic
+└── storage.rs  # CacheStorage trait, SqliteStorage, NoopStorage
+```
+
+**Core concepts:**
+
+- **Cacheable trait** - Entities must implement `cache_key()`, `updated_at()`, `entity_type()`
+- **CacheLayer<S>** - Wraps a storage backend, provides fetch methods
+- **CacheStorage trait** - Abstraction for storage backends (SQLite, Noop)
+- **CacheResult<T>** - Contains data + source (Network, CacheFresh, CacheStale, Offline)
+
+**Fetch strategies:**
+
+```rust
+// Simple list fetch (cache-first, offline fallback)
+cache.fetch_list("boards:PROJECT", || async { jira.get_boards().await }).await
+
+// Incremental fetch (only fetches entities updated since last sync)
+cache.fetch_incremental("issues:jql", |since| async move {
+    jira.search_issues_since(jql, since).await
+}).await
+
+// Single entity fetch
+cache.fetch_one("issue:PROJ-123", || async { jira.get_issue(key).await }).await
+```
+
+**Key behaviors:**
+
+- Cache-first: returns fresh cache immediately, avoids network
+- Stale-while-revalidate: returns stale cache while fetching in background
+- Offline mode: on network failure, returns stale cache with `CacheSource::Offline`
+- Incremental sync: uses `updated_at > max_cached_updated_at` for efficient updates
 
 ## Environment
 
