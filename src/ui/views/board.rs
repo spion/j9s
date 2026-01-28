@@ -2,12 +2,12 @@ use crate::jira::types::{BoardColumn, BoardConfiguration, IssueSummary, StatusIn
 use crate::jira::JiraClient;
 use crate::query::{Query, QueryState};
 use crate::ui::components::{
-  FilterBar, FilterBarEvent, FilterField, FilterFieldPicker, FilterFieldPickerEvent, KeyResult,
-  SearchEvent, SearchInput, StatusPicker, StatusPickerEvent,
+  FilterBar, FilterBarEvent, FilterFieldPicker, FilterFieldPickerEvent, IssueFilterField,
+  KeyResult, SearchEvent, SearchInput, StatusPicker, StatusPickerEvent,
 };
 use crate::ui::ensure_valid_selection;
 use crate::ui::renderfns::{status_color, truncate};
-use crate::ui::view::{Shortcut, View, ViewAction};
+use crate::ui::view::{ShortcutInfo, View, ViewAction};
 use crate::ui::views::IssueDetailView;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
@@ -44,8 +44,8 @@ pub struct BoardView {
   swimlane_mode: bool,
 
   // Filter state (client-side filtering by field values)
-  filter_bar: FilterBar,
-  filter_picker: FilterFieldPicker, // Picker for selecting filter field
+  filter_bar: FilterBar<IssueFilterField, IssueSummary>,
+  filter_picker: FilterFieldPicker<IssueFilterField, IssueSummary>, // Picker for selecting filter field
 
   // Components
   search: SearchInput,
@@ -138,17 +138,19 @@ impl BoardView {
   }
 
   /// Extract the value of a filter field from an issue
-  fn get_field_value(field: FilterField, issue: &IssueSummary) -> Option<String> {
+  fn get_field_value(field: IssueFilterField, issue: &IssueSummary) -> Option<String> {
     match field {
-      FilterField::None => None,
-      FilterField::Assignee => issue.assignee.clone(),
-      FilterField::Epic => issue.epic.clone(),
+      IssueFilterField::None => None,
+      IssueFilterField::Assignee => issue.assignee.clone(),
+      IssueFilterField::Epic => issue.epic.clone(),
+      IssueFilterField::Status => Some(issue.status.clone()),
+      IssueFilterField::Priority => issue.priority.clone(),
     }
   }
 
   /// Extract unique values for a filter field from all issues
-  fn extract_filter_values(&self, field: FilterField) -> Vec<Option<String>> {
-    if matches!(field, FilterField::None) {
+  fn extract_filter_values(&self, field: IssueFilterField) -> Vec<Option<String>> {
+    if matches!(field, IssueFilterField::None) {
       return Vec::new();
     }
 
@@ -776,25 +778,25 @@ impl View for BoardView {
     }
   }
 
-  fn shortcuts(&self) -> Vec<Shortcut> {
+  fn shortcuts(&self) -> Vec<ShortcutInfo> {
     let mut shortcuts = vec![
-      Shortcut::new(":", "command"),
-      Shortcut::new("/", "search"),
-      Shortcut::new("r", "refresh"),
-      Shortcut::new("q", "back"),
-      Shortcut::new("f", "filter"),
+      ShortcutInfo::new(":", "command").with_priority(10),
+      ShortcutInfo::new("/", "search").with_priority(20),
+      ShortcutInfo::new("q", "back").with_priority(30),
+      ShortcutInfo::new("r", "refresh").with_priority(100),
+      ShortcutInfo::new("f", "filter").with_priority(101),
     ];
 
     // Filter tab navigation shortcuts
     if self.filter_bar.is_active() {
-      shortcuts.push(Shortcut::new("PgUp/Dn", "filter tab"));
+      shortcuts.push(ShortcutInfo::new("PgUp/Dn", "filter tab").with_priority(102));
     }
 
     // Swimlane shortcuts
     if !self.columns().is_empty() {
-      shortcuts.push(Shortcut::new("s", "swimlane"));
+      shortcuts.push(ShortcutInfo::new("s", "swimlane").with_priority(110));
       if self.swimlane_mode {
-        shortcuts.push(Shortcut::new("S-h/l", "transition"));
+        shortcuts.push(ShortcutInfo::new("S-h/l", "transition").with_priority(111));
       }
     }
 

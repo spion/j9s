@@ -1,9 +1,10 @@
-use super::filter_field_picker::FilterField;
+use super::filter_source::FilterSource;
 use super::KeyResult;
 use crate::ui::renderfns::truncate;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
+use std::marker::PhantomData;
 
 /// Events emitted by filter bar that parent needs to handle
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,18 +13,43 @@ pub enum FilterBarEvent {
   SelectionChanged,
 }
 
-/// Filter bar component for filtering issues by field values
-#[derive(Debug, Clone, Default)]
-pub struct FilterBar {
+/// Filter bar component for filtering items by field values.
+/// Generic over:
+/// - `F`: The filter source type (e.g., IssueFilterField)
+/// - `T`: The item type being filtered (e.g., IssueSummary)
+#[derive(Debug, Clone)]
+pub struct FilterBar<F, T>
+where
+  F: FilterSource<T>,
+{
   active: bool,
-  field: FilterField,
+  field: F,
   values: Vec<Option<String>>, // None = unassigned
   selected: usize,             // 0 = All, 1+ = index into values
+  _phantom: PhantomData<T>,
 }
 
-impl FilterBar {
+impl<F, T> Default for FilterBar<F, T>
+where
+  F: FilterSource<T>,
+{
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl<F, T> FilterBar<F, T>
+where
+  F: FilterSource<T>,
+{
   pub fn new() -> Self {
-    Self::default()
+    Self {
+      active: false,
+      field: F::default(),
+      values: Vec::new(),
+      selected: 0,
+      _phantom: PhantomData,
+    }
   }
 
   /// Check if filter bar is currently active
@@ -32,8 +58,8 @@ impl FilterBar {
   }
 
   /// Get the current filter field
-  pub fn field(&self) -> FilterField {
-    self.field
+  pub fn field(&self) -> F {
+    self.field.clone()
   }
 
   /// Get the currently selected filter value
@@ -47,11 +73,11 @@ impl FilterBar {
   }
 
   /// Set the filter field and values, resetting selection to "All"
-  pub fn set_field_and_values(&mut self, field: FilterField, values: Vec<Option<String>>) {
-    self.field = field;
+  pub fn set_field_and_values(&mut self, field: F, values: Vec<Option<String>>) {
+    self.field = field.clone();
     self.values = values;
     self.selected = 0;
-    self.active = !matches!(field, FilterField::None) && !self.values.is_empty();
+    self.active = field.is_active() && !self.values.is_empty();
   }
 
   /// Update values without changing field, preserving selection if possible
@@ -66,13 +92,13 @@ impl FilterBar {
     if self.selected > max_selection {
       self.selected = 0;
     }
-    self.active = !matches!(self.field, FilterField::None) && !self.values.is_empty();
+    self.active = self.field.is_active() && !self.values.is_empty();
   }
 
   /// Reset filter to inactive state
   pub fn clear(&mut self) {
     self.active = false;
-    self.field = FilterField::None;
+    self.field = F::default();
     self.values.clear();
     self.selected = 0;
   }

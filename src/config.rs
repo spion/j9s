@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 pub struct Config {
   pub jira: JiraConfig,
   pub default_project: Option<String>,
+  /// Custom title for header (defaults to Jira domain if not set)
+  pub title: Option<String>,
   #[serde(default)]
   pub boards: BoardsConfig,
 }

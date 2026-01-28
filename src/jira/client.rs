@@ -335,6 +335,23 @@ impl JiraClient {
     Ok(response.into())
   }
 
+  /// Get epics for a project
+  pub async fn get_epics(&self, project: &str) -> Result<Vec<IssueSummary>> {
+    let jql = format!(
+      "project = {} AND issuetype = Epic ORDER BY updated DESC",
+      project
+    );
+    self.search_issues(&jql).await
+  }
+
+  /// Get issues that belong to an epic
+  pub async fn get_epic_issues(&self, epic_key: &str) -> Result<Vec<IssueSummary>> {
+    // Use the Epic Link field if configured, otherwise try "Epic Link"
+    let epic_field = self.epic_field.as_deref().unwrap_or("Epic Link");
+    let jql = format!("\"{}\" = {} ORDER BY updated DESC", epic_field, epic_key);
+    self.search_issues(&jql).await
+  }
+
   /// Update issue status by finding and executing the appropriate transition
   pub async fn update_issue_status(&self, issue_key: &str, status_id: &str) -> Result<()> {
     // Get available transitions

@@ -3,43 +3,33 @@ use crate::jira::JiraClient;
 use crate::query::Query;
 use crate::ui::components::{IssueFilterField, KeyResult, TicketPanel, TicketPanelEvent};
 use crate::ui::view::{ShortcutInfo, ShortcutProvider, View, ViewAction};
-use crate::ui::views::IssueDetailView;
+use crate::ui::views::EpicDetailView;
 use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 
-/// View for displaying a list of issues
-pub struct IssueListView {
+/// View for displaying a list of epics in a project
+pub struct EpicListView {
   jira: JiraClient,
   project: String,
   query: Query<Vec<IssueSummary>>,
   panel: TicketPanel<IssueFilterField>,
 }
 
-impl IssueListView {
+impl EpicListView {
   pub fn new(project: String, jira: JiraClient) -> Self {
-    let jql = if project.is_empty() {
-      String::new()
-    } else {
-      format!(
-        "project = {} AND resolution = unresolved ORDER BY updated DESC",
-        project
-      )
-    };
-
-    let mut query = if jql.is_empty() {
-      // No project configured - create a query that returns empty results
+    let mut query = if project.is_empty() {
+      // No project configured
       Query::new(|| async { Ok(Vec::new()) })
     } else {
-      // Create query with the JiraClient
       let jira_for_query = jira.clone();
+      let project_for_query = project.clone();
       Query::new(move || {
         let jira = jira_for_query.clone();
-        let jql = jql.clone();
-        async move { jira.search_issues(&jql).await.map_err(|e| e.to_string()) }
+        let project = project_for_query.clone();
+        async move { jira.get_epics(&project).await.map_err(|e| e.to_string()) }
       })
     };
 
-    // Start fetching immediately
     query.fetch();
 
     Self {
@@ -51,19 +41,18 @@ impl IssueListView {
   }
 
   fn title(&self) -> String {
-    format!("Issues [{}]", self.project)
+    format!("Epics [{}]", self.project)
   }
 }
 
-impl View for IssueListView {
+impl View for EpicListView {
   fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
-    // Get data slice directly from query to avoid self borrow
     let items = self.query.data().map(|v| v.as_slice()).unwrap_or(&[]);
 
     match self.panel.handle_key(key, items) {
       KeyResult::Handled => ViewAction::None,
-      KeyResult::Event(TicketPanelEvent::Selected(issue)) => {
-        ViewAction::Push(Box::new(IssueDetailView::new(issue.key, self.jira.clone())))
+      KeyResult::Event(TicketPanelEvent::Selected(epic)) => {
+        ViewAction::Push(Box::new(EpicDetailView::new(epic, self.jira.clone())))
       }
       KeyResult::Event(TicketPanelEvent::RefreshRequested) => {
         self.query.refetch();
@@ -85,9 +74,9 @@ impl View for IssueListView {
 
   fn breadcrumb_label(&self) -> String {
     if self.project.is_empty() {
-      "Issues".to_string()
+      "Epics".to_string()
     } else {
-      format!("Issues [{}]", self.project)
+      format!("Epics [{}]", self.project)
     }
   }
 
@@ -99,7 +88,6 @@ impl View for IssueListView {
     let was_loading = self.query.is_loading();
     self.query.poll();
 
-    // Update filter values when data finishes loading
     if was_loading && !self.query.is_loading() {
       if let Some(data) = self.query.data() {
         self.panel.update_filter_values(data);
@@ -114,7 +102,6 @@ impl View for IssueListView {
       ShortcutInfo::new("q", "back").with_priority(30),
     ];
 
-    // Add panel shortcuts
     shortcuts.extend(self.panel.shortcuts());
 
     shortcuts

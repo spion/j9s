@@ -1,18 +1,51 @@
 use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 
-/// A keyboard shortcut hint for display in the header
-#[derive(Debug, Clone)]
-pub struct Shortcut {
-  pub key: &'static str,
-  pub label: &'static str,
+/// When a shortcut should be shown in the header
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShortcutVisibility {
+  #[default]
+  Always, // Always shown
+  WhenActive, // Only when component is active/focused
 }
 
-impl Shortcut {
+/// A keyboard shortcut hint for display in the header
+#[derive(Debug, Clone)]
+pub struct ShortcutInfo {
+  pub key: &'static str,
+  pub label: &'static str,
+  pub visibility: ShortcutVisibility,
+  pub priority: u8, // Lower = shown first
+}
+
+impl ShortcutInfo {
   pub const fn new(key: &'static str, label: &'static str) -> Self {
-    Self { key, label }
+    Self {
+      key,
+      label,
+      visibility: ShortcutVisibility::Always,
+      priority: 100,
+    }
+  }
+
+  pub const fn with_priority(mut self, priority: u8) -> Self {
+    self.priority = priority;
+    self
+  }
+
+  pub const fn when_active(mut self) -> Self {
+    self.visibility = ShortcutVisibility::WhenActive;
+    self
   }
 }
+
+/// Trait for components that provide shortcuts
+pub trait ShortcutProvider {
+  fn shortcuts(&self) -> Vec<ShortcutInfo>;
+}
+
+// Alias for backwards compatibility
+pub type Shortcut = ShortcutInfo;
 
 /// Actions that a view can request in response to user input
 pub enum ViewAction {
@@ -52,11 +85,11 @@ pub trait View {
 
   /// Get keyboard shortcuts to display in the header
   /// Override this to provide view-specific shortcuts
-  fn shortcuts(&self) -> Vec<Shortcut> {
+  fn shortcuts(&self) -> Vec<ShortcutInfo> {
     vec![
-      Shortcut::new(":", "command"),
-      Shortcut::new("/", "filter"),
-      Shortcut::new("q", "back"),
+      ShortcutInfo::new(":", "command").with_priority(10),
+      ShortcutInfo::new("/", "search").with_priority(20),
+      ShortcutInfo::new("q", "back").with_priority(30),
     ]
   }
 }

@@ -38,7 +38,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
   draw_header(
     frame,
     chunks[0],
-    app.jira_url(),
+    app.title(),
     app.current_project(),
     &shortcuts,
   );

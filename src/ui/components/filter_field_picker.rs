@@ -1,50 +1,52 @@
+use super::filter_source::FilterSource;
 use super::KeyResult;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
-
-/// Field to filter issues by
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FilterField {
-  #[default]
-  None,
-  Assignee,
-  Epic,
-}
-
-impl FilterField {
-  pub fn label(&self) -> &'static str {
-    match self {
-      FilterField::None => "None",
-      FilterField::Assignee => "Assignee",
-      FilterField::Epic => "Epic",
-    }
-  }
-
-  fn all() -> &'static [FilterField] {
-    &[FilterField::None, FilterField::Assignee, FilterField::Epic]
-  }
-}
+use std::marker::PhantomData;
 
 /// Events emitted by filter field picker that parent needs to handle
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FilterFieldPickerEvent {
+pub enum FilterFieldPickerEvent<F> {
   /// Field selected
-  Selected(FilterField),
+  Selected(F),
   /// Picker cancelled
   Cancelled,
 }
 
-/// Filter field picker component for selecting which field to group/filter by
-#[derive(Debug, Clone, Default)]
-pub struct FilterFieldPicker {
+/// Filter field picker component for selecting which field to group/filter by.
+/// Generic over:
+/// - `F`: The filter source type (e.g., IssueFilterField)
+/// - `T`: The item type being filtered (e.g., IssueSummary)
+#[derive(Debug, Clone)]
+pub struct FilterFieldPicker<F, T>
+where
+  F: FilterSource<T>,
+{
   active: bool,
   selected: usize,
+  _phantom: PhantomData<(F, T)>,
 }
 
-impl FilterFieldPicker {
+impl<F, T> Default for FilterFieldPicker<F, T>
+where
+  F: FilterSource<T>,
+{
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl<F, T> FilterFieldPicker<F, T>
+where
+  F: FilterSource<T>,
+{
   pub fn new() -> Self {
-    Self::default()
+    Self {
+      active: false,
+      selected: 0,
+      _phantom: PhantomData,
+    }
   }
 
   /// Check if picker is currently active
@@ -65,10 +67,12 @@ impl FilterFieldPicker {
   }
 
   /// Handle a key event
-  pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult<FilterFieldPickerEvent> {
+  pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult<FilterFieldPickerEvent<F>> {
     if !self.active {
       return KeyResult::NotHandled;
     }
+
+    let fields = F::all_variants();
 
     match key.code {
       KeyCode::Esc | KeyCode::Char('q') => {
@@ -76,24 +80,21 @@ impl FilterFieldPicker {
         KeyResult::Event(FilterFieldPickerEvent::Cancelled)
       }
       KeyCode::Enter => {
-        let fields = FilterField::all();
-        if let Some(&field) = fields.get(self.selected) {
+        if let Some(field) = fields.get(self.selected) {
           self.hide();
-          KeyResult::Event(FilterFieldPickerEvent::Selected(field))
+          KeyResult::Event(FilterFieldPickerEvent::Selected(field.clone()))
         } else {
           self.hide();
           KeyResult::Event(FilterFieldPickerEvent::Cancelled)
         }
       }
       KeyCode::Char('j') | KeyCode::Down => {
-        let fields = FilterField::all();
         if !fields.is_empty() {
           self.selected = (self.selected + 1) % fields.len();
         }
         KeyResult::Handled
       }
       KeyCode::Char('k') | KeyCode::Up => {
-        let fields = FilterField::all();
         if !fields.is_empty() {
           self.selected = if self.selected == 0 {
             fields.len() - 1
@@ -113,7 +114,7 @@ impl FilterFieldPicker {
       return;
     }
 
-    let fields = FilterField::all();
+    let fields = F::all_variants();
 
     // Calculate overlay dimensions
     let max_name_len = fields.iter().map(|f| f.label().len()).max().unwrap_or(10);

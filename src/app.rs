@@ -5,8 +5,8 @@ use crate::event::{Event, EventHandler};
 use crate::jira::JiraClient;
 use crate::ui;
 use crate::ui::components::{CommandEvent, CommandInput, KeyResult};
-use crate::ui::view::{Shortcut, View, ViewAction};
-use crate::ui::views::{BoardListView, IssueListView};
+use crate::ui::view::{ShortcutInfo, View, ViewAction};
+use crate::ui::views::{BoardListView, EpicListView, IssueListView};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{
@@ -145,7 +145,8 @@ impl App {
         ))];
       }
       "epics" => {
-        // TODO: Implement epics view
+        let project = self.config.default_project.clone().unwrap_or_default();
+        self.view_stack = vec![Box::new(EpicListView::new(project, self.jira.clone()))];
       }
       "searches" => {
         // TODO: Implement saved searches view
@@ -167,8 +168,12 @@ impl App {
     }
   }
 
-  pub fn jira_url(&self) -> &str {
-    &self.config.jira.url
+  pub fn title(&self) -> &str {
+    self
+      .config
+      .title
+      .as_deref()
+      .unwrap_or_else(|| extract_domain(&self.config.jira.url))
   }
 
   pub fn current_project(&self) -> &str {
@@ -194,17 +199,28 @@ impl App {
   }
 
   /// Get current view's shortcuts
-  pub fn current_shortcuts(&self) -> Vec<Shortcut> {
+  pub fn current_shortcuts(&self) -> Vec<ShortcutInfo> {
     self
       .view_stack
       .last()
       .map(|v| v.shortcuts())
       .unwrap_or_else(|| {
         vec![
-          Shortcut::new(":", "command"),
-          Shortcut::new("/", "filter"),
-          Shortcut::new("q", "back"),
+          ShortcutInfo::new(":", "command").with_priority(10),
+          ShortcutInfo::new("/", "search").with_priority(20),
+          ShortcutInfo::new("q", "back").with_priority(30),
         ]
       })
   }
+}
+
+/// Extract domain from Jira URL
+fn extract_domain(url: &str) -> &str {
+  url
+    .strip_prefix("https://")
+    .or_else(|| url.strip_prefix("http://"))
+    .unwrap_or(url)
+    .split('/')
+    .next()
+    .unwrap_or(url)
 }
