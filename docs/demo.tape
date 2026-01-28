@@ -4,8 +4,8 @@
 # Configuration
 Output demo.mp4
 Set FontSize 16
-Set Width 1200
-Set Height 700
+Set Width 1600
+Set Height 900
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 80ms
 

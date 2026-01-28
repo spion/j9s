@@ -4,7 +4,7 @@
 j9s is a terminal-based UI to interact with Jira, inspired by [k9s](https://k9scli.io/).
 It allows you to quickly browse, search, and manage Jira issues from the command line.
 
-<img width="1940" height="1017" alt="Image" src="https://github.com/user-attachments/assets/2ab7a694-bc8e-4306-8840-035c909aa424" />
+https://github.com/user-attachments/assets/f6bc7326-848a-4bd9-96e8-1b962d680873
 
 ## Features
 
