@@ -5,6 +5,17 @@
 - Rust formatting: 100 columns, 2-space indentation (see `rustfmt.toml`)
 - Run `cargo fmt` before committing
 
+## Coding approach
+
+- Concise: Highly prioritize brevity, but without sacrificing clarity.
+  - Existing code may be more verbose than desired. When writing new code or refactoring, prefer the concise style over matching surrounding patterns.
+- Abstractions: valued when they are very general, powerful and/or have practical benefit.
+  - Its okay if some abstractions are forward-looking: the code is evolving and sometimes we build a bit of the foundations before the need.
+  - Prefer using less powerful method of describing abstractions if its still possible to get great clarity and benefit, but aim for a concise and clear language of expression.
+  - The abstraction quality bar is high - if you would be embarassed to put the abstraction in a README.md its probably not worth it.
+  - Modularity. Abstractions should be able to stand largely on their own, whenever possible.
+- Comments: prefer self-documenting code.
+
 ## Project Structure
 
 - `src/app.rs` - Main app state and event loop
@@ -22,22 +33,9 @@
 src/ui/
 ├── mod.rs           # Main draw function
 ├── view.rs          # View trait and ViewAction enum
-├── components/      # Stateful components with co-located rendering
-│   ├── key_result.rs        # KeyResult<T> enum for key handling
-│   ├── input.rs             # TextInput - base input component
-│   ├── search_input.rs      # SearchInput - wraps TextInput, renders overlay
-│   ├── command_input.rs     # CommandInput - wraps TextInput + autocomplete
-│   ├── filter_bar.rs        # FilterBar - tab-based filter selection
-│   ├── filter_field_picker.rs # FilterFieldPicker - filter field selector
-│   └── status_picker.rs     # StatusPicker - status selection overlay
-├── views/           # View structs with co-located rendering
-│   ├── issue_list.rs    # IssueListView
-│   ├── issue_detail.rs  # IssueDetailView
-│   ├── board_list.rs    # BoardListView
-│   └── board.rs         # BoardView (kanban/list)
+├── components/      # Stateful components with co-located rendering and event handling
+├── views/           # Toplevel views (screens) structs with co-located rendering, stackable
 └── renderfns/       # Purely stateless render functions
-    ├── header.rs
-    └── footer.rs
 ```
 
 **Delegation chain:** App → View → Component
