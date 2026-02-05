@@ -137,11 +137,11 @@ impl App {
       }
       "boards" => {
         let project = self.config.default_project.clone();
-        let hide_swimlanes = self.config.boards.hide_swimlanes.clone();
+        let hide_columns = self.config.boards.hide_columns.clone();
         self.view_stack = vec![Box::new(BoardListView::new(
           project,
           self.jira.clone(),
-          hide_swimlanes,
+          hide_columns,
         ))];
       }
       "epics" => {

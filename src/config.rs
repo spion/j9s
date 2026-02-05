@@ -15,9 +15,9 @@ pub struct Config {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct BoardsConfig {
-  /// Swimlane names to hide in board views (case-insensitive)
+  /// Column names to hide in board views (case-insensitive)
   #[serde(default, deserialize_with = "deserialize_lowercase_set")]
-  pub hide_swimlanes: BTreeSet<String>,
+  pub hide_columns: BTreeSet<String>,
 }
 
 fn deserialize_lowercase_set<'de, D>(deserializer: D) -> Result<BTreeSet<String>, D::Error>

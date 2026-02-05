@@ -18,7 +18,7 @@ https://github.com/user-attachments/assets/f6bc7326-848a-4bd9-96e8-1b962d680873
     - [x] view issue details with `Enter`.
     - [ ] Shortcuts for common edits like changing labels, assignees, transition, etc.
   - [x] `:boards` -> Issues
-    - [x] swimlane (column) mode for boards
+    - [x] column mode for boards
     - [x] move issues between columns with `Shift-Left` and `Shift-Right`
   - [ ] create new issues
   - [ ] Toggle board filtering by quick filters

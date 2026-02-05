@@ -22,9 +22,9 @@ default_project: "PROJ"
 
 # Board view settings (optional)
 # boards:
-#   # Swimlanes to hide in board views (by name)
-#   # Useful for hiding swimlanes like "Done" or "Backlog"
-#   hide_swimlanes:
+#   # Columns to hide in board views (by name)
+#   # Useful for hiding columns like "Done" or "Backlog"
+#   hide_columns:
 #     - "Done"
 #     - "Backlog"
 

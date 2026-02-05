@@ -29,7 +29,7 @@ Sleep 2s
 Enter
 Sleep 2s
 
-# Toggle swimlane/kanban mode
+# Toggle column/kanban mode
 Type "s"
 Sleep 2s
 
