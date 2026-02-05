@@ -13,26 +13,17 @@ pub fn draw_header(
   project: &str,
   shortcuts: &[ShortcutInfo],
 ) {
-  // Split into 3 columns: left (context), middle (shortcuts), right (logo)
-  let columns = Layout::default()
-    .direction(Direction::Horizontal)
-    .constraints([
-      Constraint::Length(30), // Left: hostname/project
-      Constraint::Min(30),    // Middle: shortcuts (flexible)
-      Constraint::Length(6),  // Right: logo
-    ])
-    .split(area);
+  let columns = Layout::horizontal([
+    Constraint::Length(30), // Left: hostname/project
+    Constraint::Min(30),    // Middle: shortcuts (flexible)
+    Constraint::Length(6),  // Right: logo
+  ])
+  .split(area);
 
   // === Left column: title and project (always 2 lines) ===
-  let left_line1 = Line::from(vec![Span::styled(
-    format!(" {}", title),
-    Style::default().fg(Color::Cyan),
-  )]);
+  let left_line1 = Line::from(format!(" {}", title).cyan());
 
-  let left_line2 = Line::from(vec![
-    Span::styled(" Project: ", Style::default().fg(Color::DarkGray)),
-    Span::styled(project, Style::default().fg(Color::Yellow).bold()),
-  ]);
+  let left_line2 = Line::from(vec![" Project: ".dark_gray(), project.yellow().bold()]);
 
   let left_text = Text::from(vec![left_line1, left_line2]);
   let left_para = Paragraph::new(left_text);
@@ -50,11 +41,8 @@ pub fn draw_header(
 
   let format_shortcut = |s: &ShortcutInfo| -> Line {
     Line::from(vec![
-      Span::styled(format!("<{}>", s.key), Style::default().fg(Color::Cyan)),
-      Span::styled(
-        format!(" {}", s.label),
-        Style::default().fg(Color::DarkGray),
-      ),
+      format!("<{}>", s.key).cyan(),
+      format!(" {}", s.label).dark_gray(),
     ])
   };
 
@@ -95,8 +83,8 @@ pub fn draw_header(
 
   // === Right column: j9s logo ===
   let logo = Paragraph::new(" j9s ")
-    .style(Style::default().fg(Color::Cyan).bold())
-    .alignment(Alignment::Right);
+    .style(Style::new().cyan().bold())
+    .right_aligned();
   frame.render_widget(logo, columns[2]);
 }
 

@@ -2,7 +2,7 @@ use super::KeyResult;
 use crate::jira::types::StatusInfo;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState};
 
 /// Events emitted by status picker that parent needs to handle
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,7 +13,7 @@ pub enum StatusPickerEvent {
   Cancelled,
 }
 
-/// Status picker component for selecting target status in swimlane transitions
+/// Status picker component for selecting target status in column transitions
 #[derive(Debug, Clone, Default)]
 pub struct StatusPicker {
   active: bool,
@@ -107,16 +107,14 @@ impl StatusPicker {
     // Center the overlay
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
-
     let overlay_area = Rect::new(x, y, width, height);
 
     // Clear the area behind the overlay
     frame.render_widget(Clear, overlay_area);
 
     // Draw the border/block
-    let block = Block::default()
-      .borders(Borders::ALL)
-      .border_style(Style::default().fg(Color::Yellow))
+    let block = Block::bordered()
+      .border_style(Color::Yellow)
       .title(format!(" {} ", self.title));
 
     let inner = block.inner(overlay_area);
@@ -130,17 +128,10 @@ impl StatusPicker {
     let items: Vec<ListItem> = self
       .statuses
       .iter()
-      .map(|status| {
-        let line = Line::from(vec![Span::styled(
-          &status.name,
-          Style::default().fg(Color::Cyan),
-        )]);
-        ListItem::new(line)
-      })
+      .map(|status| ListItem::new(status.name.as_str().cyan()))
       .collect();
 
-    let list =
-      List::new(items).highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    let list = List::new(items).highlight_style(Style::new().on_dark_gray().white());
 
     let mut state = ListState::default();
     state.select(Some(self.selected));

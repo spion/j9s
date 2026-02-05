@@ -4,7 +4,7 @@ use crate::query::{Query, QueryState};
 use crate::ui::view::{Shortcut, View, ViewAction};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Paragraph, Wrap};
 
 /// View for displaying issue details
 pub struct IssueDetailView {
@@ -34,26 +34,23 @@ impl IssueDetailView {
       _ => format!(" {} ", self.key),
     };
 
-    let block = Block::default()
-      .title(title)
-      .title_alignment(Alignment::Center)
-      .borders(Borders::ALL)
-      .border_style(Style::default().fg(Color::Blue));
+    let block = Block::bordered()
+      .title(Line::from(title).centered())
+      .border_style(Color::Blue);
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     // Show loading or error state
     if self.query.is_loading() {
-      let paragraph =
-        Paragraph::new("Loading issue details...").style(Style::default().fg(Color::DarkGray));
+      let paragraph = Paragraph::new("Loading issue details...").fg(Color::DarkGray);
       frame.render_widget(paragraph, inner);
       return;
     }
 
     if let Some(error) = self.query.error() {
-      let paragraph = Paragraph::new(format!("Error: {}\n\nPress 'r' to retry.", error))
-        .style(Style::default().fg(Color::Red));
+      let paragraph =
+        Paragraph::new(format!("Error: {}\n\nPress 'r' to retry.", error)).fg(Color::Red);
       frame.render_widget(paragraph, inner);
       return;
     }
@@ -64,26 +61,21 @@ impl IssueDetailView {
     };
 
     // Layout for issue details
-    let chunks = Layout::default()
-      .direction(Direction::Vertical)
-      .constraints([
-        Constraint::Length(3), // Header (summary, status, assignee)
-        Constraint::Length(1), // Separator
-        Constraint::Min(1),    // Description
-      ])
-      .split(inner);
+    let chunks = Layout::vertical([
+      Constraint::Length(3), // Header (summary, status, assignee)
+      Constraint::Length(1), // Separator
+      Constraint::Min(1),    // Description
+    ])
+    .split(inner);
 
     // Header
     let header = vec![
+      Line::from(vec!["Summary: ".dark_gray(), Span::raw(&issue.summary)]),
       Line::from(vec![
-        Span::styled("Summary: ", Style::default().fg(Color::DarkGray)),
-        Span::raw(&issue.summary),
-      ]),
-      Line::from(vec![
-        Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(&issue.status, Style::default().fg(Color::Yellow)),
+        "Status: ".dark_gray(),
+        issue.status.as_str().yellow(),
         Span::raw("  "),
-        Span::styled("Assignee: ", Style::default().fg(Color::DarkGray)),
+        "Assignee: ".dark_gray(),
         Span::raw(issue.assignee.as_deref().unwrap_or("Unassigned")),
       ]),
     ];
@@ -91,15 +83,12 @@ impl IssueDetailView {
     frame.render_widget(header_para, chunks[0]);
 
     // Separator
-    let sep = Paragraph::new("─".repeat(chunks[1].width as usize))
-      .style(Style::default().fg(Color::DarkGray));
+    let sep = Paragraph::new("─".repeat(chunks[1].width as usize)).fg(Color::DarkGray);
     frame.render_widget(sep, chunks[1]);
 
     // Description
     let desc = issue.description.as_deref().unwrap_or("No description");
-    let desc_para = Paragraph::new(desc)
-      .wrap(Wrap { trim: true })
-      .style(Style::default());
+    let desc_para = Paragraph::new(desc).wrap(Wrap { trim: true });
     frame.render_widget(desc_para, chunks[2]);
   }
 

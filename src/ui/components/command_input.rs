@@ -3,7 +3,7 @@ use super::KeyResult;
 use crate::commands::{self, Command};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph};
 
 /// Events emitted by command input that parent needs to handle
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,9 +153,8 @@ impl CommandInput {
     frame.render_widget(Clear, overlay_area);
 
     // Draw the border/block
-    let block = Block::default()
-      .borders(Borders::ALL)
-      .border_style(Style::default().fg(Color::Yellow))
+    let block = Block::bordered()
+      .border_style(Color::Yellow)
       .title(" Command ");
 
     let inner = block.inner(overlay_area);
@@ -166,19 +165,17 @@ impl CommandInput {
     }
 
     // Split inner area: input line + suggestions
-    let chunks = Layout::default()
-      .direction(Direction::Vertical)
-      .constraints([
-        Constraint::Length(1), // Input line
-        Constraint::Min(0),    // Suggestions
-      ])
-      .split(inner);
+    let chunks = Layout::vertical([
+      Constraint::Length(1), // Input line
+      Constraint::Min(0),    // Suggestions
+    ])
+    .split(inner);
 
     // Draw input line
     let input_line = Line::from(vec![
-      Span::styled(":", Style::default().fg(Color::Yellow)),
+      ":".yellow(),
       Span::raw(self.input.value()),
-      Span::styled("_", Style::default().fg(Color::Yellow)), // Cursor
+      "_".yellow(), // Cursor
     ]);
     let input_para = Paragraph::new(input_line);
     frame.render_widget(input_para, chunks[0]);
@@ -190,18 +187,14 @@ impl CommandInput {
         .take(8)
         .map(|cmd| {
           let line = Line::from(vec![
-            Span::styled(
-              format!("{:<12}", cmd.name),
-              Style::default().fg(Color::Cyan),
-            ),
-            Span::styled(cmd.description, Style::default().fg(Color::DarkGray)),
+            format!("{:<12}", cmd.name).cyan(),
+            cmd.description.dark_gray(),
           ]);
           ListItem::new(line)
         })
         .collect();
 
-      let list =
-        List::new(items).highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White));
+      let list = List::new(items).highlight_style(Style::new().on_dark_gray().white());
 
       let mut state = ListState::default();
       state.select(Some(self.selected_suggestion));

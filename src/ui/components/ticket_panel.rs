@@ -9,7 +9,7 @@ use crate::ui::renderfns::{status_color, truncate};
 use crate::ui::view::{ShortcutInfo, ShortcutProvider};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 
 /// Events emitted by TicketPanel that parent view needs to handle
 #[derive(Debug, Clone)]
@@ -25,7 +25,7 @@ pub enum TicketPanelEvent {
 }
 
 /// Reusable ticket panel component combining:
-/// - List/column (swimlane) view modes
+/// - List/column view modes
 /// - Filter bar with tabs
 /// - Filter field picker overlay
 /// - Search overlay
@@ -347,10 +347,7 @@ impl<F: FilterSource<IssueSummary>> TicketPanel<F> {
   ) {
     // Split area for filter bar (if active) and main content
     let (filter_area, content_area) = if self.filter_bar.is_active() {
-      let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(area);
+      let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
       (Some(chunks[0]), chunks[1])
     } else {
       (None, area)
@@ -397,17 +394,13 @@ impl<F: FilterSource<IssueSummary>> TicketPanel<F> {
       format!(" {} ({} issues){} ", title, len, search_indicator)
     };
 
-    let block = Block::default()
-      .title(display_title)
-      .title_alignment(Alignment::Center)
-      .borders(Borders::ALL)
-      .border_style(Style::default().fg(Color::Blue));
+    let block = Block::bordered()
+      .title(Line::from(display_title).centered())
+      .border_style(Color::Blue);
 
     if items.is_empty() && !is_loading {
       let content = "No issues found.";
-      let paragraph = Paragraph::new(content)
-        .block(block)
-        .style(Style::default().fg(Color::DarkGray));
+      let paragraph = Paragraph::new(content).block(block).fg(Color::DarkGray);
       frame.render_widget(paragraph, area);
       return;
     }
@@ -417,15 +410,9 @@ impl<F: FilterSource<IssueSummary>> TicketPanel<F> {
       .map(|issue| {
         let color = status_color(&issue.status);
         let line = Line::from(vec![
-          Span::styled(
-            format!("{:<15}", issue.key),
-            Style::default().fg(Color::Cyan),
-          ),
+          format!("{:<15}", issue.key).cyan(),
           Span::raw(" "),
-          Span::styled(
-            format!("{:<15}", truncate(&issue.status, 15)),
-            Style::default().fg(color),
-          ),
+          Span::styled(format!("{:<15}", truncate(&issue.status, 15)), color),
           Span::raw(" "),
           Span::raw(issue.summary.clone()),
         ]);
@@ -435,11 +422,7 @@ impl<F: FilterSource<IssueSummary>> TicketPanel<F> {
 
     let list = List::new(list_items)
       .block(block)
-      .highlight_style(
-        Style::default()
-          .bg(Color::DarkGray)
-          .add_modifier(Modifier::BOLD),
-      )
+      .highlight_style(Style::new().on_dark_gray().bold())
       .highlight_symbol("> ");
 
     frame.render_stateful_widget(list, area, &mut self.list_state);
@@ -454,20 +437,16 @@ impl<F: FilterSource<IssueSummary>> TicketPanel<F> {
     is_loading: bool,
   ) {
     if self.columns.is_empty() {
-      let block = Block::default()
-        .title(format!(" {} ", title))
-        .title_alignment(Alignment::Center)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Blue));
+      let block = Block::bordered()
+        .title(Line::from(format!(" {} ", title)).centered())
+        .border_style(Color::Blue);
 
       let content = if is_loading {
         "Loading..."
       } else {
         "No columns configured."
       };
-      let paragraph = Paragraph::new(content)
-        .block(block)
-        .style(Style::default().fg(Color::DarkGray));
+      let paragraph = Paragraph::new(content).block(block).fg(Color::DarkGray);
       frame.render_widget(paragraph, area);
       return;
     }
@@ -493,34 +472,25 @@ impl<F: FilterSource<IssueSummary>> TicketPanel<F> {
       };
 
       let col_title = format!(" {} ({}) ", truncate(&column.name, 15), col_items.len());
-      let block = Block::default()
-        .title(col_title)
-        .title_alignment(Alignment::Center)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
+      let block = Block::bordered()
+        .title(Line::from(col_title).centered())
+        .border_style(border_color);
 
       let list_items: Vec<ListItem> = col_items
         .iter()
         .map(|issue| {
-          let issue_id = Line::from(vec![Span::styled(
-            &issue.key,
-            Style::default().fg(Color::Cyan),
-          )]);
-          let issue_title = Line::from(vec![Span::raw(truncate(
+          let issue_id = Line::from(issue.key.as_str().cyan());
+          let issue_title = Line::from(truncate(
             &issue.summary,
             col_area.width.saturating_sub(4) as usize,
-          ))]);
+          ));
           ListItem::new(vec![issue_id, issue_title])
         })
         .collect();
 
       let list = List::new(list_items)
         .block(block)
-        .highlight_style(
-          Style::default()
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(Style::new().on_dark_gray().bold())
         .highlight_symbol("> ");
 
       if is_selected_column {
@@ -548,7 +518,7 @@ impl<F: FilterSource<IssueSummary>> ShortcutProvider for TicketPanel<F> {
 
     // Column mode shortcuts
     if self.has_columns() {
-      shortcuts.push(ShortcutInfo::new("s", "swimlane").with_priority(110));
+      shortcuts.push(ShortcutInfo::new("s", "columns").with_priority(110));
     }
 
     shortcuts

@@ -2,7 +2,7 @@ use super::filter_source::FilterSource;
 use super::KeyResult;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState};
 use std::marker::PhantomData;
 
 /// Events emitted by filter field picker that parent needs to handle
@@ -124,16 +124,14 @@ where
     // Center the overlay
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
-
     let overlay_area = Rect::new(x, y, width, height);
 
     // Clear the area behind the overlay
     frame.render_widget(Clear, overlay_area);
 
     // Draw the border/block
-    let block = Block::default()
-      .borders(Borders::ALL)
-      .border_style(Style::default().fg(Color::Yellow))
+    let block = Block::bordered()
+      .border_style(Color::Yellow)
       .title(" Filter By ");
 
     let inner = block.inner(overlay_area);
@@ -146,17 +144,10 @@ where
     // Draw field list
     let items: Vec<ListItem> = fields
       .iter()
-      .map(|field| {
-        let line = Line::from(vec![Span::styled(
-          field.label(),
-          Style::default().fg(Color::Cyan),
-        )]);
-        ListItem::new(line)
-      })
+      .map(|field| ListItem::new(field.label().cyan()))
       .collect();
 
-    let list =
-      List::new(items).highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    let list = List::new(items).highlight_style(Style::new().on_dark_gray().white());
 
     let mut state = ListState::default();
     state.select(Some(self.selected));

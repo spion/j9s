@@ -11,7 +11,7 @@ use crate::ui::view::{ShortcutInfo, View, ViewAction};
 use crate::ui::views::IssueDetailView;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use std::collections::BTreeSet;
 use tracing::info;
 
@@ -31,17 +31,17 @@ pub struct BoardView {
   // Jira client for API calls
   jira: JiraClient,
 
-  // Config: swimlane names to hide (lowercase for case-insensitive matching)
-  hide_swimlanes: BTreeSet<String>,
+  // Config: column names to hide (lowercase for case-insensitive matching)
+  hide_columns: BTreeSet<String>,
 
   // Data query
   query: Query<BoardData>,
 
   // UI state
-  list_state: ListState,    // Selection for list mode
-  swimlane_selected: usize, // Selection within column for swimlane mode
+  list_state: ListState,  // Selection for list mode
+  column_selected: usize, // Selection within column for column mode
   selected_column: usize,
-  swimlane_mode: bool,
+  column_mode: bool,
 
   // Filter state (client-side filtering by field values)
   filter_bar: FilterBar<IssueFilterField, IssueSummary>,
@@ -63,7 +63,7 @@ impl BoardView {
     board_id: u64,
     board_name: String,
     jira: JiraClient,
-    hide_swimlanes: BTreeSet<String>,
+    hide_columns: BTreeSet<String>,
   ) -> Self {
     let jira_for_query = jira.clone();
     let mut query = Query::new(move || {
@@ -96,12 +96,12 @@ impl BoardView {
       board_id,
       board_name,
       jira,
-      hide_swimlanes,
+      hide_columns,
       query,
       list_state: ListState::default(),
-      swimlane_selected: 0,
+      column_selected: 0,
       selected_column: 0,
-      swimlane_mode: false,
+      column_mode: false,
       filter_bar: FilterBar::new(),
       filter_picker: FilterFieldPicker::new(),
       search: SearchInput::new(),
@@ -127,7 +127,7 @@ impl BoardView {
       .map(|d| {
         d.columns
           .iter()
-          .filter(|col| !self.hide_swimlanes.contains(&col.name.to_lowercase()))
+          .filter(|col| !self.hide_columns.contains(&col.name.to_lowercase()))
           .collect()
       })
       .unwrap_or_default()
@@ -240,11 +240,9 @@ impl BoardView {
       _ => format!(" {} ({} issues){} ", self.board_name, len, search_indicator),
     };
 
-    let block = Block::default()
-      .title(title)
-      .title_alignment(Alignment::Center)
-      .borders(Borders::ALL)
-      .border_style(Style::default().fg(Color::Blue));
+    let block = Block::bordered()
+      .title(Line::from(title).centered())
+      .border_style(Color::Blue);
 
     if self.issues().is_empty() && !self.is_loading() {
       let content = if self.query.is_error() {
@@ -252,9 +250,7 @@ impl BoardView {
       } else {
         "No issues found on this board."
       };
-      let paragraph = Paragraph::new(content)
-        .block(block)
-        .style(Style::default().fg(Color::DarkGray));
+      let paragraph = Paragraph::new(content).block(block).fg(Color::DarkGray);
       frame.render_widget(paragraph, area);
       return;
     }
@@ -267,15 +263,9 @@ impl BoardView {
         let color = status_color(&issue.status);
 
         let line = Line::from(vec![
-          Span::styled(
-            format!("{:<15}", issue.key),
-            Style::default().fg(Color::Cyan),
-          ),
+          format!("{:<15}", issue.key).cyan(),
           Span::raw(" "),
-          Span::styled(
-            format!("{:<15}", truncate(&issue.status, 15)),
-            Style::default().fg(color),
-          ),
+          Span::styled(format!("{:<15}", truncate(&issue.status, 15)), color),
           Span::raw(" "),
           Span::raw(issue.summary.clone()),
         ]);
@@ -285,34 +275,26 @@ impl BoardView {
 
     let list = List::new(items)
       .block(block)
-      .highlight_style(
-        Style::default()
-          .bg(Color::DarkGray)
-          .add_modifier(Modifier::BOLD),
-      )
+      .highlight_style(Style::new().on_dark_gray().bold())
       .highlight_symbol("> ");
 
     frame.render_stateful_widget(list, area, &mut self.list_state);
   }
 
-  /// Render swimlane (kanban) mode
-  fn render_swimlanes(&self, frame: &mut Frame, area: Rect) {
+  /// Render column (kanban) mode
+  fn render_columns(&self, frame: &mut Frame, area: Rect) {
     let columns = self.columns();
     if columns.is_empty() {
-      let block = Block::default()
-        .title(format!(" {} ", self.board_name))
-        .title_alignment(Alignment::Center)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Blue));
+      let block = Block::bordered()
+        .title(Line::from(format!(" {} ", self.board_name)).centered())
+        .border_style(Color::Blue);
 
       let content = if self.is_loading() {
         "Loading..."
       } else {
         "No columns configured for this board."
       };
-      let paragraph = Paragraph::new(content)
-        .block(block)
-        .style(Style::default().fg(Color::DarkGray));
+      let paragraph = Paragraph::new(content).block(block).fg(Color::DarkGray);
       frame.render_widget(paragraph, area);
       return;
     }
@@ -337,39 +319,30 @@ impl BoardView {
       };
 
       let title = format!(" {} ({}) ", truncate(&column.name, 15), issues.len());
-      let block = Block::default()
-        .title(title)
-        .title_alignment(Alignment::Center)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
+      let block = Block::bordered()
+        .title(Line::from(title).centered())
+        .border_style(border_color);
 
       let items: Vec<ListItem> = issues
         .iter()
         .map(|issue| {
-          let issue_id = Line::from(vec![Span::styled(
-            &issue.key,
-            Style::default().fg(Color::Cyan),
-          )]);
-          let issue_title = Line::from(vec![Span::raw(truncate(
+          let issue_id = Line::from(issue.key.as_str().cyan());
+          let issue_title = Line::from(truncate(
             &issue.summary,
             col_area.width.saturating_sub(4) as usize,
-          ))]);
+          ));
           ListItem::new(vec![issue_id, issue_title])
         })
         .collect();
 
       let list = List::new(items)
         .block(block)
-        .highlight_style(
-          Style::default()
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(Style::new().on_dark_gray().bold())
         .highlight_symbol("> ");
 
       if is_selected_column {
         let mut state = ListState::default();
-        state.select(Some(self.swimlane_selected));
+        state.select(Some(self.column_selected));
         frame.render_stateful_widget(list, col_area, &mut state);
       } else {
         frame.render_widget(list, col_area);
@@ -379,10 +352,10 @@ impl BoardView {
 
   /// Get the currently selected issue
   fn selected_issue(&self) -> Option<&IssueSummary> {
-    if self.swimlane_mode {
+    if self.column_mode {
       if let Some(column) = self.columns().get(self.selected_column) {
         let issues = self.issues_for_column(column);
-        issues.get(self.swimlane_selected).copied()
+        issues.get(self.column_selected).copied()
       } else {
         None
       }
@@ -403,8 +376,8 @@ impl BoardView {
     }
   }
 
-  /// Navigate in swimlane mode
-  fn navigate_swimlane(&mut self, direction: i32, horizontal: bool) {
+  /// Navigate in column mode
+  fn navigate_column(&mut self, direction: i32, horizontal: bool) {
     if horizontal {
       // Move between columns
       let num_columns = self.columns().len();
@@ -418,7 +391,7 @@ impl BoardView {
         self.selected_column = self.selected_column.checked_sub(1).unwrap_or(0);
       }
       // Reset selection within new column
-      self.swimlane_selected = 0;
+      self.column_selected = 0;
     } else {
       // Move within column
       if let Some(column) = self.columns().get(self.selected_column) {
@@ -428,9 +401,9 @@ impl BoardView {
         }
 
         if direction > 0 {
-          self.swimlane_selected = (self.swimlane_selected + 1).min(len - 1);
+          self.column_selected = (self.column_selected + 1).min(len - 1);
         } else {
-          self.swimlane_selected = self.swimlane_selected.checked_sub(1).unwrap_or(0);
+          self.column_selected = self.column_selected.checked_sub(1).unwrap_or(0);
         }
       }
     }
@@ -535,22 +508,19 @@ impl BoardView {
       let estimated_lines = (char_count / inner_width).max(line_count) + 1;
       let height = (estimated_lines as u16 + 2).min(area.height - 4).max(5);
 
-      // Center the popup
       let x = area.x + (area.width.saturating_sub(max_width)) / 2;
       let y = area.y + (area.height.saturating_sub(height)) / 2;
-
       let error_area = Rect::new(x, y, max_width, height);
-      frame.render_widget(ratatui::widgets::Clear, error_area);
+      frame.render_widget(Clear, error_area);
 
-      let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red))
+      let block = Block::bordered()
+        .border_style(Color::Red)
         .title(" Error - press any key to dismiss ");
 
       let paragraph = Paragraph::new(msg.as_str())
         .block(block)
-        .style(Style::default().fg(Color::Red))
-        .wrap(ratatui::widgets::Wrap { trim: false });
+        .fg(Color::Red)
+        .wrap(Wrap { trim: false });
 
       frame.render_widget(paragraph, error_area);
     }
@@ -576,7 +546,7 @@ impl BoardView {
       KeyResult::Event(FilterBarEvent::SelectionChanged) => {
         // Reset list selection when changing filter
         self.list_state.select(Some(0));
-        self.swimlane_selected = 0;
+        self.column_selected = 0;
         return Some(ViewAction::None);
       }
       KeyResult::NotHandled => {}
@@ -604,7 +574,7 @@ impl BoardView {
       KeyResult::Event(SearchEvent::Changed(query)) => {
         self.search_filter = if query.is_empty() { None } else { Some(query) };
         self.list_state.select(Some(0));
-        self.swimlane_selected = 0;
+        self.column_selected = 0;
         return Some(ViewAction::None);
       }
       KeyResult::Event(SearchEvent::Submitted) => return Some(ViewAction::None),
@@ -616,7 +586,7 @@ impl BoardView {
 
   fn handle_navigation(&mut self, key: KeyEvent) -> Option<ViewAction> {
     // Mode-specific navigation
-    if self.swimlane_mode {
+    if self.column_mode {
       match key.code {
         KeyCode::Char('h') | KeyCode::Left => {
           if key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -625,7 +595,7 @@ impl BoardView {
               self.initiate_status_change(self.selected_column - 1);
             }
           } else {
-            self.navigate_swimlane(-1, true);
+            self.navigate_column(-1, true);
           }
           Some(ViewAction::None)
         }
@@ -637,16 +607,16 @@ impl BoardView {
               self.initiate_status_change(self.selected_column + 1);
             }
           } else {
-            self.navigate_swimlane(1, true);
+            self.navigate_column(1, true);
           }
           Some(ViewAction::None)
         }
         KeyCode::Char('j') | KeyCode::Down => {
-          self.navigate_swimlane(1, false);
+          self.navigate_column(1, false);
           Some(ViewAction::None)
         }
         KeyCode::Char('k') | KeyCode::Up => {
-          self.navigate_swimlane(-1, false);
+          self.navigate_column(-1, false);
           Some(ViewAction::None)
         }
         _ => None,
@@ -674,9 +644,9 @@ impl BoardView {
         Some(ViewAction::None)
       }
       KeyCode::Char('s') => {
-        self.swimlane_mode = !self.swimlane_mode;
+        self.column_mode = !self.column_mode;
         self.list_state.select(Some(0));
-        self.swimlane_selected = 0;
+        self.column_selected = 0;
         self.selected_column = 0;
         Some(ViewAction::None)
       }
@@ -718,10 +688,7 @@ impl View for BoardView {
   fn render(&mut self, frame: &mut Frame, area: Rect) {
     // Split area for filters (if active) and main content
     let (filter_area, content_area) = if self.filter_bar.is_active() {
-      let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(area);
+      let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
       (Some(chunks[0]), chunks[1])
     } else {
       (None, area)
@@ -733,8 +700,8 @@ impl View for BoardView {
     }
 
     // Render main content
-    if self.swimlane_mode {
-      self.render_swimlanes(frame, content_area);
+    if self.column_mode {
+      self.render_columns(frame, content_area);
     } else {
       self.render_list(frame, content_area);
     }
@@ -753,8 +720,8 @@ impl View for BoardView {
   }
 
   fn breadcrumb_label(&self) -> String {
-    if self.swimlane_mode {
-      format!("{} [Swimlane]", self.board_name)
+    if self.column_mode {
+      format!("{} [Columns]", self.board_name)
     } else {
       self.board_name.clone()
     }
@@ -792,10 +759,10 @@ impl View for BoardView {
       shortcuts.push(ShortcutInfo::new("PgUp/Dn", "filter tab").with_priority(102));
     }
 
-    // Swimlane shortcuts
+    // Column mode shortcuts
     if !self.columns().is_empty() {
-      shortcuts.push(ShortcutInfo::new("s", "swimlane").with_priority(110));
-      if self.swimlane_mode {
+      shortcuts.push(ShortcutInfo::new("s", "columns").with_priority(110));
+      if self.column_mode {
         shortcuts.push(ShortcutInfo::new("S-h/l", "transition").with_priority(111));
       }
     }

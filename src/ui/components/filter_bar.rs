@@ -149,27 +149,24 @@ where
     let mut spans = Vec::new();
 
     // Show current filter field name
-    spans.push(Span::styled(
-      format!("[{}] ", self.field.label()),
-      Style::default().fg(Color::Yellow),
-    ));
+    spans.push(format!("[{}] ", self.field.label()).yellow());
 
     // "All" tab (index 0)
     let all_style = if self.selected == 0 {
-      Style::default().fg(Color::Black).bg(Color::Cyan)
+      Style::new().black().on_cyan()
     } else {
-      Style::default().fg(Color::Gray)
+      Style::new().gray()
     };
     spans.push(Span::styled(" All ", all_style));
 
     // Individual filter tabs
     for (idx, value) in self.values.iter().enumerate() {
-      spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+      spans.push("│".dark_gray());
       let is_selected = self.selected == idx + 1;
       let style = if is_selected {
-        Style::default().fg(Color::Black).bg(Color::Cyan)
+        Style::new().black().on_cyan()
       } else {
-        Style::default().fg(Color::Gray)
+        Style::new().gray()
       };
       let label = match value {
         Some(v) => format!(" {} ", truncate(v, 15)),

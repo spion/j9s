@@ -23,15 +23,12 @@ pub fn ensure_valid_selection(state: &mut ListState, len: usize) {
 
 /// Main draw function
 pub fn draw(frame: &mut Frame, app: &mut App) {
-  // Header is always 2 lines
-  let chunks = Layout::default()
-    .direction(Direction::Vertical)
-    .constraints([
-      Constraint::Length(2), // Header (always 2 lines)
-      Constraint::Min(1),    // Main content
-      Constraint::Length(1), // Footer (breadcrumb)
-    ])
-    .split(frame.area());
+  let chunks = Layout::vertical([
+    Constraint::Length(2), // Header (always 2 lines)
+    Constraint::Min(1),    // Main content
+    Constraint::Length(1), // Footer (breadcrumb)
+  ])
+  .split(frame.area());
 
   // Draw header with dynamic shortcuts
   let shortcuts = app.current_shortcuts();

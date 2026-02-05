@@ -88,25 +88,19 @@ impl View for EpicDetailView {
 
   fn render(&mut self, frame: &mut Frame, area: Rect) {
     // Split area: epic info (2 lines) + child issues
-    let chunks = Layout::default()
-      .direction(Direction::Vertical)
-      .constraints([Constraint::Length(2), Constraint::Min(0)])
-      .split(area);
+    let chunks = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(area);
 
     // Epic info header (borderless, styled text)
     let line1 = Line::from(vec![
-      Span::styled(
-        format!(" {} ", self.epic.key),
-        Style::default().fg(Color::Cyan).bold(),
-      ),
-      Span::styled(&self.epic.summary, Style::default().fg(Color::White)),
+      format!(" {} ", self.epic.key).cyan().bold(),
+      self.epic.summary.as_str().white(),
     ]);
 
     let line2 = Line::from(vec![
-      Span::styled(" Status: ", Style::default().fg(Color::DarkGray)),
-      Span::styled(&self.epic.status, Style::default().fg(Color::Yellow)),
-      Span::styled("  Type: ", Style::default().fg(Color::DarkGray)),
-      Span::styled(&self.epic.issue_type, Style::default().fg(Color::Magenta)),
+      " Status: ".dark_gray(),
+      self.epic.status.as_str().yellow(),
+      "  Type: ".dark_gray(),
+      self.epic.issue_type.as_str().magenta(),
     ]);
 
     let text = Text::from(vec![line1, line2]);

@@ -2,7 +2,7 @@ use super::input::{InputResult, TextInput};
 use super::KeyResult;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
 
 /// Events emitted by search input that parent needs to handle
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,9 +90,8 @@ impl SearchInput {
     frame.render_widget(Clear, overlay_area);
 
     // Draw the border/block
-    let block = Block::default()
-      .borders(Borders::ALL)
-      .border_style(Style::default().fg(Color::Yellow))
+    let block = Block::bordered()
+      .border_style(Color::Yellow)
       .title(" Search ");
 
     let inner = block.inner(overlay_area);
@@ -104,9 +103,9 @@ impl SearchInput {
 
     // Draw input line
     let input_line = Line::from(vec![
-      Span::styled("/", Style::default().fg(Color::Yellow)),
+      "/".yellow(),
       Span::raw(self.input.value()),
-      Span::styled("_", Style::default().fg(Color::Yellow)), // Cursor
+      "_".yellow(), // Cursor
     ]);
     let input_para = Paragraph::new(input_line);
     frame.render_widget(input_para, inner);

@@ -9,21 +9,20 @@ pub fn draw_footer(frame: &mut Frame, area: Rect, breadcrumb: &[String]) {
 
   for (i, part) in breadcrumb.iter().enumerate() {
     if i > 0 {
-      spans.push(Span::styled(" > ", Style::default().fg(Color::DarkGray)));
+      spans.push(" > ".dark_gray());
     }
 
     let style = if i == breadcrumb.len() - 1 {
-      // Current view - highlighted
-      Style::default().fg(Color::Cyan).bold()
+      Style::new().cyan().bold()
     } else {
-      Style::default().fg(Color::White)
+      Style::new().white()
     };
 
     spans.push(Span::styled(part.clone(), style));
   }
 
   let line = Line::from(spans);
-  let paragraph = Paragraph::new(line).style(Style::default().bg(Color::Black));
+  let paragraph = Paragraph::new(line).style(Style::new().on_black());
 
   frame.render_widget(paragraph, area);
 }

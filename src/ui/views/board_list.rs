@@ -7,13 +7,13 @@ use crate::ui::view::{View, ViewAction};
 use crate::ui::views::BoardView;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use std::collections::BTreeSet;
 
 /// View for displaying a list of boards
 pub struct BoardListView {
   jira: JiraClient,
-  hide_swimlanes: BTreeSet<String>,
+  hide_columns: BTreeSet<String>,
   query: Query<Vec<Board>>,
   list_state: ListState,
   search: SearchInput,
@@ -21,7 +21,7 @@ pub struct BoardListView {
 }
 
 impl BoardListView {
-  pub fn new(project: Option<String>, jira: JiraClient, hide_swimlanes: BTreeSet<String>) -> Self {
+  pub fn new(project: Option<String>, jira: JiraClient, hide_columns: BTreeSet<String>) -> Self {
     let jira_for_query = jira.clone();
     let mut query = Query::new(move || {
       let jira = jira_for_query.clone();
@@ -39,7 +39,7 @@ impl BoardListView {
 
     Self {
       jira,
-      hide_swimlanes,
+      hide_columns,
       query,
       list_state: ListState::default(),
       search: SearchInput::new(),
@@ -86,11 +86,9 @@ impl BoardListView {
       _ => format!(" Boards ({}){} ", len, search_indicator),
     };
 
-    let block = Block::default()
-      .title(title)
-      .title_alignment(Alignment::Center)
-      .borders(Borders::ALL)
-      .border_style(Style::default().fg(Color::Blue));
+    let block = Block::bordered()
+      .title(Line::from(title).centered())
+      .border_style(Color::Blue);
 
     if self.boards().is_empty() && !self.is_loading() {
       let content = if self.query.is_error() {
@@ -98,9 +96,7 @@ impl BoardListView {
       } else {
         "No boards found."
       };
-      let paragraph = Paragraph::new(content)
-        .block(block)
-        .style(Style::default().fg(Color::DarkGray));
+      let paragraph = Paragraph::new(content).block(block).fg(Color::DarkGray);
       frame.render_widget(paragraph, area);
       return;
     }
@@ -111,12 +107,9 @@ impl BoardListView {
       .iter()
       .map(|board| {
         let line = Line::from(vec![
-          Span::styled(format!("{:<8}", board.id), Style::default().fg(Color::Cyan)),
+          format!("{:<8}", board.id).cyan(),
           Span::raw(" "),
-          Span::styled(
-            format!("{:<10}", board.board_type),
-            Style::default().fg(Color::Yellow),
-          ),
+          format!("{:<10}", board.board_type).yellow(),
           Span::raw(" "),
           Span::raw(board.name.clone()),
         ]);
@@ -126,11 +119,7 @@ impl BoardListView {
 
     let list = List::new(items)
       .block(block)
-      .highlight_style(
-        Style::default()
-          .bg(Color::DarkGray)
-          .add_modifier(Modifier::BOLD),
-      )
+      .highlight_style(Style::new().on_dark_gray().bold())
       .highlight_symbol("> ");
 
     frame.render_stateful_widget(list, area, &mut self.list_state);
@@ -177,7 +166,7 @@ impl BoardListView {
               board.id,
               board.name.clone(),
               self.jira.clone(),
-              self.hide_swimlanes.clone(),
+              self.hide_columns.clone(),
             ))));
           }
         }

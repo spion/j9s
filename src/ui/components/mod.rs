@@ -12,7 +12,6 @@ mod ticket_panel;
 pub use command_input::{CommandEvent, CommandInput};
 pub use filter_bar::{FilterBar, FilterBarEvent};
 pub use filter_field_picker::{FilterFieldPicker, FilterFieldPickerEvent};
-pub use filter_source::FilterSource;
 pub use issue_filters::IssueFilterField;
 pub use key_result::KeyResult;
 pub use search_input::{SearchEvent, SearchInput};
