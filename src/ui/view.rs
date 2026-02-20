@@ -55,6 +55,8 @@ pub enum ViewAction {
   Push(Box<dyn View>),
   /// Pop current view from stack (go back)
   Pop,
+  /// Request full terminal redraw (e.g. after launching external process)
+  Redraw,
 }
 
 /// Trait for view behavior

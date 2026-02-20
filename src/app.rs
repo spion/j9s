@@ -33,6 +33,9 @@ pub struct App {
 
   /// Whether to quit
   should_quit: bool,
+
+  /// Whether the terminal needs a full redraw
+  needs_redraw: bool,
 }
 
 impl App {
@@ -54,6 +57,7 @@ impl App {
       config,
       jira,
       should_quit: false,
+      needs_redraw: false,
     })
   }
 
@@ -68,6 +72,10 @@ impl App {
 
     // Main loop
     while !self.should_quit {
+      if self.needs_redraw {
+        terminal.clear()?;
+        self.needs_redraw = false;
+      }
       // Draw UI
       terminal.draw(|frame| ui::draw(frame, self))?;
 
@@ -130,6 +138,9 @@ impl App {
               view.on_resume();
             }
           }
+        }
+        ViewAction::Redraw => {
+          self.needs_redraw = true;
         }
         ViewAction::None => {}
       }

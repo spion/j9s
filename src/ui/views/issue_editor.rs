@@ -300,7 +300,7 @@ impl IssueEditorView {
       }
       Field::Description => {
         self.launch_editor();
-        Some(ViewAction::None)
+        Some(ViewAction::Redraw)
       }
       _ => None,
     }
