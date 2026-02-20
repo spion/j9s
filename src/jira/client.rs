@@ -2,9 +2,9 @@ use crate::cache::{CacheLayer, SqliteStorage};
 use crate::config::{AuthType, Config};
 use crate::jira::api_types::{
   reserialize, ApiBoardConfigResponse, ApiBoardIssuesResponse, ApiIssue, ApiIssueFields,
-  ApiTransitionsResponse,
+  ApiProjectIssueType, ApiTransitionsResponse,
 };
-use crate::jira::types::{Board, BoardConfiguration, Issue, IssueSummary};
+use crate::jira::types::{Board, BoardConfiguration, Issue, IssueSummary, IssueTypeInfo};
 use color_eyre::{eyre::eyre, Result};
 use serde_json::Value;
 use url::form_urlencoded;
@@ -350,6 +350,95 @@ impl JiraClient {
     let epic_field = self.epic_field.as_deref().unwrap_or("Epic Link");
     let jql = format!("\"{}\" = {} ORDER BY updated DESC", epic_field, epic_key);
     self.search_issues(&jql).await
+  }
+
+  /// Get issue types and their valid statuses for a project.
+  /// Works on both Cloud and Server via REST API v2.
+  pub async fn get_project_statuses(&self, project: &str) -> Result<Vec<IssueTypeInfo>> {
+    let endpoint = format!("/project/{}/statuses", project);
+    let response: Vec<ApiProjectIssueType> = self
+      .client
+      .get("api", &endpoint)
+      .await
+      .map_err(|e| eyre!("Failed to get project statuses: {}", e))?;
+    Ok(response.into_iter().map(|t| t.into_domain()).collect())
+  }
+
+  /// Create a new issue. Returns the created issue key.
+  /// Uses plain text description (API v2) for Cloud + Server compatibility.
+  pub async fn create_issue(
+    &self,
+    project: &str,
+    summary: &str,
+    issue_type: &str,
+    description: Option<&str>,
+    labels: &[String],
+    epic: Option<&str>,
+  ) -> Result<String> {
+    let mut fields = serde_json::json!({
+      "project": { "key": project },
+      "summary": summary,
+      "issuetype": { "name": issue_type },
+      "labels": labels,
+    });
+
+    if let Some(desc) = description {
+      fields["description"] = serde_json::Value::String(desc.to_string());
+    }
+
+    if let (Some(epic_key), Some(epic_field)) = (epic, self.epic_field.as_deref()) {
+      fields[epic_field] = serde_json::Value::String(epic_key.to_string());
+    }
+
+    let body = serde_json::json!({ "fields": fields });
+    let response: serde_json::Value = self
+      .client
+      .post("api", "/issue", body)
+      .await
+      .map_err(|e| eyre!("Failed to create issue: {}", e))?;
+
+    response["key"]
+      .as_str()
+      .map(String::from)
+      .ok_or_else(|| eyre!("Create issue response missing key"))
+  }
+
+  /// Update an existing issue's fields.
+  pub async fn update_issue(
+    &self,
+    key: &str,
+    summary: &str,
+    description: Option<&str>,
+    issue_type: &str,
+    labels: &[String],
+    epic: Option<&str>,
+  ) -> Result<()> {
+    let mut fields = serde_json::json!({
+      "summary": summary,
+      "issuetype": { "name": issue_type },
+      "labels": labels,
+    });
+
+    fields["description"] = match description {
+      Some(desc) => serde_json::Value::String(desc.to_string()),
+      None => serde_json::Value::Null,
+    };
+
+    if let Some(epic_field) = self.epic_field.as_deref() {
+      fields[epic_field] = match epic {
+        Some(epic_key) => serde_json::Value::String(epic_key.to_string()),
+        None => serde_json::Value::Null,
+      };
+    }
+
+    let body = serde_json::json!({ "fields": fields });
+    let endpoint = format!("/issue/{}", key);
+    self
+      .client
+      .put::<Value, _>("api", &endpoint, body)
+      .await
+      .map_err(|e| eyre!("Failed to update issue {}: {}", key, e))?;
+    Ok(())
   }
 
   /// Update issue status by finding and executing the appropriate transition

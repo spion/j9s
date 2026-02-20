@@ -45,7 +45,11 @@ impl App {
     let default_project = config.default_project.clone().unwrap_or_default();
 
     Ok(Self {
-      view_stack: vec![Box::new(IssueListView::new(default_project, jira.clone()))],
+      view_stack: vec![Box::new(IssueListView::new(
+        default_project,
+        jira.clone(),
+        config.default_labels.clone(),
+      ))],
       command: CommandInput::new(),
       config,
       jira,
@@ -122,6 +126,9 @@ impl App {
         ViewAction::Pop => {
           if self.view_stack.len() > 1 {
             self.view_stack.pop();
+            if let Some(view) = self.view_stack.last_mut() {
+              view.on_resume();
+            }
           }
         }
         ViewAction::None => {}
@@ -133,7 +140,12 @@ impl App {
     match cmd {
       "issues" => {
         let project = self.config.default_project.clone().unwrap_or_default();
-        self.view_stack = vec![Box::new(IssueListView::new(project, self.jira.clone()))];
+        let labels = self.config.default_labels.clone();
+        self.view_stack = vec![Box::new(IssueListView::new(
+          project,
+          self.jira.clone(),
+          labels,
+        ))];
       }
       "boards" => {
         let project = self.config.default_project.clone();
@@ -146,7 +158,12 @@ impl App {
       }
       "epics" => {
         let project = self.config.default_project.clone().unwrap_or_default();
-        self.view_stack = vec![Box::new(EpicListView::new(project, self.jira.clone()))];
+        let labels = self.config.default_labels.clone();
+        self.view_stack = vec![Box::new(EpicListView::new(
+          project,
+          self.jira.clone(),
+          labels,
+        ))];
       }
       "searches" => {
         // TODO: Implement saved searches view

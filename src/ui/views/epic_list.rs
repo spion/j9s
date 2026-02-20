@@ -3,7 +3,7 @@ use crate::jira::JiraClient;
 use crate::query::Query;
 use crate::ui::components::{IssueFilterField, KeyResult, TicketPanel, TicketPanelEvent};
 use crate::ui::view::{ShortcutInfo, ShortcutProvider, View, ViewAction};
-use crate::ui::views::EpicDetailView;
+use crate::ui::views::{EpicDetailView, IssueEditorView};
 use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 
@@ -11,12 +11,13 @@ use ratatui::prelude::*;
 pub struct EpicListView {
   jira: JiraClient,
   project: String,
+  default_labels: Vec<String>,
   query: Query<Vec<IssueSummary>>,
   panel: TicketPanel<IssueFilterField>,
 }
 
 impl EpicListView {
-  pub fn new(project: String, jira: JiraClient) -> Self {
+  pub fn new(project: String, jira: JiraClient, default_labels: Vec<String>) -> Self {
     let mut query = if project.is_empty() {
       // No project configured
       Query::new(|| async { Ok(Vec::new()) })
@@ -35,6 +36,7 @@ impl EpicListView {
     Self {
       jira,
       project,
+      default_labels,
       query,
       panel: TicketPanel::list_only(),
     }
@@ -51,15 +53,26 @@ impl View for EpicListView {
 
     match self.panel.handle_key(key, items) {
       KeyResult::Handled => ViewAction::None,
-      KeyResult::Event(TicketPanelEvent::Selected(epic)) => {
-        ViewAction::Push(Box::new(EpicDetailView::new(epic, self.jira.clone())))
-      }
+      KeyResult::Event(TicketPanelEvent::Selected(epic)) => ViewAction::Push(Box::new(
+        EpicDetailView::new(epic, self.jira.clone(), self.default_labels.clone()),
+      )),
       KeyResult::Event(TicketPanelEvent::RefreshRequested) => {
         self.query.refetch();
         ViewAction::None
       }
       KeyResult::Event(TicketPanelEvent::Back) => ViewAction::Pop,
       KeyResult::Event(TicketPanelEvent::FilterChanged) => ViewAction::None,
+      KeyResult::Event(TicketPanelEvent::CreateRequested) => {
+        ViewAction::Push(Box::new(IssueEditorView::new_create(
+          self.project.clone(),
+          None,
+          self.default_labels.clone(),
+          self.jira.clone(),
+        )))
+      }
+      KeyResult::Event(TicketPanelEvent::EditRequested(issue)) => ViewAction::Push(Box::new(
+        IssueEditorView::new_edit(issue, self.jira.clone()),
+      )),
       KeyResult::NotHandled => ViewAction::None,
     }
   }
@@ -93,6 +106,10 @@ impl View for EpicListView {
         self.panel.update_filter_values(data);
       }
     }
+  }
+
+  fn on_resume(&mut self) {
+    self.query.refetch();
   }
 
   fn shortcuts(&self) -> Vec<ShortcutInfo> {

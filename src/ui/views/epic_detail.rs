@@ -3,7 +3,7 @@ use crate::jira::JiraClient;
 use crate::query::Query;
 use crate::ui::components::{IssueFilterField, KeyResult, TicketPanel, TicketPanelEvent};
 use crate::ui::view::{ShortcutInfo, ShortcutProvider, View, ViewAction};
-use crate::ui::views::IssueDetailView;
+use crate::ui::views::{IssueDetailView, IssueEditorView};
 use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
@@ -13,12 +13,13 @@ use std::collections::BTreeMap;
 pub struct EpicDetailView {
   jira: JiraClient,
   epic: IssueSummary,
+  default_labels: Vec<String>,
   query: Query<Vec<IssueSummary>>,
   panel: TicketPanel<IssueFilterField>,
 }
 
 impl EpicDetailView {
-  pub fn new(epic: IssueSummary, jira: JiraClient) -> Self {
+  pub fn new(epic: IssueSummary, jira: JiraClient, default_labels: Vec<String>) -> Self {
     let epic_key = epic.key.clone();
     let jira_for_query = jira.clone();
 
@@ -38,6 +39,7 @@ impl EpicDetailView {
     Self {
       jira,
       epic,
+      default_labels,
       query,
       panel: TicketPanel::new(Vec::new()), // Will set columns when data loads
     }
@@ -82,6 +84,18 @@ impl View for EpicDetailView {
       }
       KeyResult::Event(TicketPanelEvent::Back) => ViewAction::Pop,
       KeyResult::Event(TicketPanelEvent::FilterChanged) => ViewAction::None,
+      KeyResult::Event(TicketPanelEvent::CreateRequested) => {
+        let project = self.epic.key.split('-').next().unwrap_or("").to_string();
+        ViewAction::Push(Box::new(IssueEditorView::new_create(
+          project,
+          Some(self.epic.key.clone()),
+          self.default_labels.clone(),
+          self.jira.clone(),
+        )))
+      }
+      KeyResult::Event(TicketPanelEvent::EditRequested(issue)) => ViewAction::Push(Box::new(
+        IssueEditorView::new_edit(issue, self.jira.clone()),
+      )),
       KeyResult::NotHandled => ViewAction::None,
     }
   }
@@ -125,12 +139,15 @@ impl View for EpicDetailView {
 
     if was_loading && !self.query.is_loading() {
       if let Some(data) = self.query.data() {
-        // Derive columns from child issues' statuses
         let columns = Self::derive_columns(data);
         self.panel.set_columns(columns);
         self.panel.update_filter_values(data);
       }
     }
+  }
+
+  fn on_resume(&mut self) {
+    self.query.refetch();
   }
 
   fn shortcuts(&self) -> Vec<ShortcutInfo> {

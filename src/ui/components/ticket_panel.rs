@@ -22,6 +22,10 @@ pub enum TicketPanelEvent {
   Back,
   /// Filter selection changed
   FilterChanged,
+  /// User wants to create a new issue ('c' key)
+  CreateRequested,
+  /// User wants to edit the selected issue ('e' key)
+  EditRequested(IssueSummary),
 }
 
 /// Reusable ticket panel component combining:
@@ -289,6 +293,16 @@ impl<F: FilterSource<IssueSummary>> TicketPanel<F> {
         self.toggle_column_mode();
         Some(KeyResult::Handled)
       }
+      KeyCode::Char('c') => Some(KeyResult::Event(TicketPanelEvent::CreateRequested)),
+      KeyCode::Char('e') => {
+        if let Some(issue) = self.selected(items) {
+          Some(KeyResult::Event(TicketPanelEvent::EditRequested(
+            issue.clone(),
+          )))
+        } else {
+          Some(KeyResult::Handled)
+        }
+      }
       KeyCode::Char('r') => Some(KeyResult::Event(TicketPanelEvent::RefreshRequested)),
       KeyCode::Enter => {
         if let Some(issue) = self.selected(items) {
@@ -507,6 +521,8 @@ impl<F: FilterSource<IssueSummary>> TicketPanel<F> {
 impl<F: FilterSource<IssueSummary>> ShortcutProvider for TicketPanel<F> {
   fn shortcuts(&self) -> Vec<ShortcutInfo> {
     let mut shortcuts = vec![
+      ShortcutInfo::new("c", "create").with_priority(90),
+      ShortcutInfo::new("e", "edit").with_priority(91),
       ShortcutInfo::new("r", "refresh").with_priority(100),
       ShortcutInfo::new("f", "filter").with_priority(101),
     ];

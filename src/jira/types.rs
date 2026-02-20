@@ -98,6 +98,13 @@ pub struct StatusInfo {
   pub name: String,
 }
 
+/// Issue type with its valid workflow statuses
+#[derive(Debug, Clone)]
+pub struct IssueTypeInfo {
+  pub name: String,
+  pub statuses: Vec<StatusInfo>,
+}
+
 /// Board column configuration
 #[derive(Debug, Clone)]
 pub struct BoardColumn {

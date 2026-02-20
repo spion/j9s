@@ -139,10 +139,29 @@ pub struct ApiTransitionsResponse {
 }
 
 // ============================================================================
+// Project statuses endpoint response (GET /rest/api/2/project/{project}/statuses)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct ApiProjectIssueType {
+  pub name: String,
+  #[serde(default)]
+  pub statuses: Vec<ApiProjectStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiProjectStatus {
+  pub id: String,
+  pub name: String,
+}
+
+// ============================================================================
 // Conversions to domain types
 // ============================================================================
 
-use super::types::{BoardColumn, BoardConfiguration, Issue, IssueSummary, StatusInfo};
+use super::types::{
+  BoardColumn, BoardConfiguration, Issue, IssueSummary, IssueTypeInfo, StatusInfo,
+};
 
 impl ApiIssue {
   pub fn into_summary(self) -> IssueSummary {
@@ -206,6 +225,22 @@ impl From<ApiColumn> for BoardColumn {
             s.name
           },
           id: s.id,
+        })
+        .collect(),
+    }
+  }
+}
+
+impl ApiProjectIssueType {
+  pub fn into_domain(self) -> IssueTypeInfo {
+    IssueTypeInfo {
+      name: self.name,
+      statuses: self
+        .statuses
+        .into_iter()
+        .map(|s| StatusInfo {
+          id: s.id,
+          name: s.name,
         })
         .collect(),
     }

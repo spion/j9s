@@ -83,6 +83,10 @@ pub trait View {
   /// Called on each tick to allow views to poll async queries
   fn tick(&mut self) {}
 
+  /// Called when this view becomes the top view again after a pushed view is popped.
+  /// Override to refresh data when returning from a child view.
+  fn on_resume(&mut self) {}
+
   /// Get keyboard shortcuts to display in the header
   /// Override this to provide view-specific shortcuts
   fn shortcuts(&self) -> Vec<ShortcutInfo> {

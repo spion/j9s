@@ -11,6 +11,8 @@ pub struct Config {
   pub title: Option<String>,
   #[serde(default)]
   pub boards: BoardsConfig,
+  #[serde(default)]
+  pub default_labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

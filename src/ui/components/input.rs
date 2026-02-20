@@ -41,6 +41,12 @@ impl TextInput {
     self.cursor = 0;
   }
 
+  /// Set the input value and move cursor to end
+  pub fn set_value(&mut self, value: &str) {
+    self.buffer = value.to_string();
+    self.cursor = self.buffer.len();
+  }
+
   /// Handle a key event, returning the result
   pub fn handle_key(&mut self, key: KeyEvent) -> InputResult {
     match key.code {
@@ -175,6 +181,14 @@ mod tests {
     input.handle_key(key(KeyCode::Left));
     input.handle_key(key(KeyCode::Char('b')));
     assert_eq!(input.value(), "abc");
+  }
+
+  #[test]
+  fn test_set_value() {
+    let mut input = TextInput::new();
+    input.set_value("hello");
+    assert_eq!(input.value(), "hello");
+    assert_eq!(input.cursor_position(), 5);
   }
 
   #[test]
