@@ -9,7 +9,7 @@ repository = "https://github.com/spion/j9s"
 [dependencies]
 # TUI
 ratatui = "0.30"
-crossterm = "0.29"
+crossterm = { version = "0.29", features = ["event-stream"] }
 
 # Async
 tokio = { version = "1", features = ["full"] }
