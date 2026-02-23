@@ -73,11 +73,13 @@ pub struct IssueEditorView {
   metadata_loaded: bool,
   issue_loaded: bool,
 
+  // External editor
+  pending_editor_file: Option<std::path::PathBuf>,
+
   // Submit
   submit_query: Option<Query<String>>,
   error_message: Option<String>,
   submitting: bool,
-  completed: bool,
 }
 
 impl IssueEditorView {
@@ -98,9 +100,9 @@ impl IssueEditorView {
           jira.get_project_statuses(&project),
           jira.get_epics(&project),
         );
-        Ok(ProjectMetadata {
+        Ok::<_, String>(ProjectMetadata {
           issue_types: types_result.map_err(|e| e.to_string())?,
-          epics: epics_result.map_err(|e| e.to_string())?,
+          epics: epics_result.into_result()?,
         })
       }
     });
@@ -131,9 +133,9 @@ impl IssueEditorView {
           jira.get_project_statuses(&project),
           jira.get_epics(&project),
         );
-        Ok(ProjectMetadata {
+        Ok::<_, String>(ProjectMetadata {
           issue_types: types_result.map_err(|e| e.to_string())?,
-          epics: epics_result.map_err(|e| e.to_string())?,
+          epics: epics_result.into_result()?,
         })
       }
     });
@@ -143,7 +145,7 @@ impl IssueEditorView {
     let issue_query = Query::new(move || {
       let jira = jira_issue.clone();
       let key = issue_key.clone();
-      async move { jira.get_issue(&key).await.map_err(|e| e.to_string()) }
+      async move { jira.get_issue(&key).await }
     });
 
     let mut view = Self::base(jira, metadata_query);
@@ -184,10 +186,10 @@ impl IssueEditorView {
       issue_query: None,
       metadata_loaded: false,
       issue_loaded: false,
+      pending_editor_file: None,
       submit_query: None,
       error_message: None,
       submitting: false,
-      completed: false,
     }
   }
 
@@ -269,11 +271,19 @@ impl IssueEditorView {
         self.move_focus(-1);
         Some(ViewAction::None)
       }
-      KeyCode::Char('j') | KeyCode::Down if !in_text => {
+      KeyCode::Down => {
         self.move_focus(1);
         Some(ViewAction::None)
       }
-      KeyCode::Char('k') | KeyCode::Up if !in_text => {
+      KeyCode::Char('j') if !in_text => {
+        self.move_focus(1);
+        Some(ViewAction::None)
+      }
+      KeyCode::Up => {
+        self.move_focus(-1);
+        Some(ViewAction::None)
+      }
+      KeyCode::Char('k') if !in_text => {
         self.move_focus(-1);
         Some(ViewAction::None)
       }
@@ -298,10 +308,7 @@ impl IssueEditorView {
         self.epic.show();
         Some(ViewAction::None)
       }
-      Field::Description => {
-        self.launch_editor();
-        Some(ViewAction::Redraw)
-      }
+      Field::Description => Some(self.prepare_editor()),
       _ => None,
     }
   }
@@ -392,24 +399,23 @@ impl IssueEditorView {
     self.labels.set_value(&issue.labels.join(", "));
   }
 
-  fn launch_editor(&mut self) {
+  fn prepare_editor(&mut self) -> ViewAction {
     let editor = std::env::var("EDITOR")
       .or_else(|_| std::env::var("VISUAL"))
       .unwrap_or_else(|_| "vi".to_string());
 
     let tmp_path = std::env::temp_dir().join("j9s-description.md");
     let _ = std::fs::write(&tmp_path, self.description.as_deref().unwrap_or(""));
+    self.pending_editor_file = Some(tmp_path.clone());
 
-    let _ = crossterm::terminal::disable_raw_mode();
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+    ViewAction::Suspend(Box::new(move || {
+      let _ = std::process::Command::new(&editor).arg(&tmp_path).status();
+    }))
+  }
 
-    let status = std::process::Command::new(&editor).arg(&tmp_path).status();
-
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen);
-    let _ = crossterm::terminal::enable_raw_mode();
-
-    if status.is_ok() {
-      if let Ok(content) = std::fs::read_to_string(&tmp_path) {
+  fn collect_editor_result(&mut self) {
+    if let Some(path) = self.pending_editor_file.take() {
+      if let Ok(content) = std::fs::read_to_string(&path) {
         let trimmed = content.trim().to_string();
         self.description = if trimmed.is_empty() {
           None
@@ -417,9 +423,8 @@ impl IssueEditorView {
           Some(trimmed)
         };
       }
+      let _ = std::fs::remove_file(&path);
     }
-
-    let _ = std::fs::remove_file(&tmp_path);
   }
 
   fn parse_labels(&self) -> Vec<String> {
@@ -562,13 +567,12 @@ impl IssueEditorView {
     let label_width = 14u16;
     let value_width = inner.width.saturating_sub(label_width + 2);
 
-    let fields: [(&str, Line); FIELD_COUNT] = [
+    let fields: [(&str, Line); FIELD_COUNT - 1] = [
       ("Title:", self.render_title_value()),
       ("Type:", self.render_picker_value(&self.issue_type)),
       ("Status:", self.render_picker_value(&self.status)),
       ("Epic:", self.render_picker_value(&self.epic)),
       ("Labels:", self.render_labels_value()),
-      ("Description:", self.render_description_value(value_width)),
     ];
 
     for (i, (label, value_line)) in fields.iter().enumerate() {
@@ -576,29 +580,51 @@ impl IssueEditorView {
       if y + 1 >= inner.y + inner.height {
         break;
       }
-
-      let is_focused = i == self.focused;
-
-      let indicator_area = Rect::new(inner.x, y, 1, 1);
-      let indicator = if is_focused { ">" } else { " " };
-      frame.render_widget(
-        Paragraph::new(Span::styled(indicator, Style::new().yellow())),
-        indicator_area,
+      self.render_field_row(
+        frame,
+        inner,
+        label,
+        value_line,
+        i,
+        label_width,
+        value_width,
+        y,
       );
+    }
 
-      let label_area = Rect::new(inner.x + 1, y, label_width, 1);
-      let label_style = if is_focused {
-        Style::new().yellow().bold()
+    // Description: label row + multi-line content filling remaining space
+    let desc_i = Field::Description as usize;
+    let desc_label_y = inner.y + fields.len() as u16 * 2;
+    let desc_label = "Description:";
+    let desc_hint = Line::from("(Enter to edit)".dark_gray());
+    self.render_field_row(
+      frame,
+      inner,
+      desc_label,
+      &desc_hint,
+      desc_i,
+      label_width,
+      value_width,
+      desc_label_y,
+    );
+
+    let desc_content_y = desc_label_y + 1;
+    let footer_height = 2u16; // status + help lines
+    let desc_height = inner
+      .height
+      .saturating_sub(desc_content_y - inner.y + footer_height);
+    if desc_height > 0 {
+      let desc_area = Rect::new(inner.x + 1, desc_content_y, inner.width - 2, desc_height);
+      let desc_text = self.description.as_deref().unwrap_or("");
+      let style = if self.focused == desc_i {
+        Style::new().white()
       } else {
         Style::new().dark_gray()
       };
       frame.render_widget(
-        Paragraph::new(Span::styled(*label, label_style)),
-        label_area,
+        Paragraph::new(Text::styled(desc_text, style)).wrap(ratatui::widgets::Wrap { trim: false }),
+        desc_area,
       );
-
-      let value_area = Rect::new(inner.x + label_width + 1, y, value_width, 1);
-      frame.render_widget(Paragraph::new(value_line.clone()), value_area);
     }
 
     // Status line
@@ -669,27 +695,45 @@ impl IssueEditorView {
     }
   }
 
-  fn render_description_value(&self, width: u16) -> Line<'_> {
-    match &self.description {
-      None => Line::from("(press Enter to edit)".dark_gray()),
-      Some(desc) => {
-        let preview = desc.lines().next().unwrap_or("");
-        let max = width as usize;
-        if preview.len() > max.saturating_sub(3) {
-          Line::from(format!("{}...", &preview[..max.saturating_sub(6)]).white())
-        } else {
-          Line::from(preview.white())
-        }
-      }
-    }
+  #[allow(clippy::too_many_arguments)]
+  fn render_field_row(
+    &self,
+    frame: &mut Frame,
+    inner: Rect,
+    label: &str,
+    value_line: &Line,
+    field_index: usize,
+    label_width: u16,
+    value_width: u16,
+    y: u16,
+  ) {
+    let is_focused = field_index == self.focused;
+
+    let indicator = if is_focused { ">" } else { " " };
+    frame.render_widget(
+      Paragraph::new(Span::styled(indicator, Style::new().yellow())),
+      Rect::new(inner.x, y, 1, 1),
+    );
+
+    let label_style = if is_focused {
+      Style::new().yellow().bold()
+    } else {
+      Style::new().dark_gray()
+    };
+    frame.render_widget(
+      Paragraph::new(Span::styled(label, label_style)),
+      Rect::new(inner.x + 1, y, label_width, 1),
+    );
+
+    frame.render_widget(
+      Paragraph::new(value_line.clone()),
+      Rect::new(inner.x + label_width + 1, y, value_width, 1),
+    );
   }
 }
 
 impl View for IssueEditorView {
   fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
-    if self.completed {
-      return ViewAction::Pop;
-    }
     if self.submitting {
       return ViewAction::None;
     }
@@ -731,6 +775,10 @@ impl View for IssueEditorView {
     self.epic.render_overlay(frame, area);
   }
 
+  fn on_resume(&mut self) {
+    self.collect_editor_result();
+  }
+
   fn breadcrumb_label(&self) -> String {
     if self.is_create() {
       "Create".to_string()
@@ -741,7 +789,7 @@ impl View for IssueEditorView {
     }
   }
 
-  fn tick(&mut self) {
+  fn tick(&mut self) -> ViewAction {
     if !self.metadata_loaded {
       self.metadata_query.poll();
       if self.metadata_query.data().is_some() {
@@ -777,8 +825,7 @@ impl View for IssueEditorView {
     if let Some(query) = &mut self.submit_query {
       query.poll();
       if query.data().is_some() {
-        self.completed = true;
-        self.submitting = false;
+        return ViewAction::Pop;
       }
       if let Some(err) = query.error() {
         self.error_message = Some(format!("Submit failed: {}", err));
@@ -786,6 +833,7 @@ impl View for IssueEditorView {
         self.submit_query = None;
       }
     }
+    ViewAction::None
   }
 
   fn shortcuts(&self) -> Vec<ShortcutInfo> {

@@ -33,6 +33,47 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tracing::debug;
+
+/// Three-state fetch result: fresh data, stale cache + error, or error only.
+///
+/// Enables the cache layer to express "here's cached data AND here's the network error"
+/// so Query can show stale data while also surfacing the error to the UI.
+#[derive(Debug, Clone)]
+pub enum Fetched<T> {
+  /// Fresh data from successful network fetch
+  Fresh(T),
+  /// Cached data available, but refresh failed with this error
+  Stale(T, String),
+  /// No data available, fetch failed
+  Error(String),
+}
+
+impl<T> Fetched<T> {
+  pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Fetched<U> {
+    match self {
+      Fetched::Fresh(data) => Fetched::Fresh(f(data)),
+      Fetched::Stale(data, msg) => Fetched::Stale(f(data), msg),
+      Fetched::Error(msg) => Fetched::Error(msg),
+    }
+  }
+
+  pub fn into_result(self) -> Result<T, String> {
+    match self {
+      Fetched::Fresh(data) | Fetched::Stale(data, _) => Ok(data),
+      Fetched::Error(msg) => Err(msg),
+    }
+  }
+}
+
+impl<T> From<Result<T, String>> for Fetched<T> {
+  fn from(result: Result<T, String>) -> Self {
+    match result {
+      Ok(data) => Fetched::Fresh(data),
+      Err(e) => Fetched::Error(e),
+    }
+  }
+}
 
 /// The state of a query (excludes cached data)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,8 +109,8 @@ impl QueryState {
   }
 }
 
-/// A boxed future that returns a Result<T, String>
-type BoxFuture<T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send>>;
+/// A boxed future that returns a Fetched<T>
+type BoxFuture<T> = Pin<Box<dyn Future<Output = Fetched<T>> + Send>>;
 
 /// A factory function that creates futures for fetching data
 type FetcherFn<T> = Box<dyn Fn() -> BoxFuture<T> + Send + Sync>;
@@ -86,7 +127,7 @@ pub struct Query<T> {
   state: QueryState,
   cached_data: Option<T>,
   fetcher: FetcherFn<T>,
-  receiver: Option<mpsc::UnboundedReceiver<Result<T, String>>>,
+  receiver: Option<mpsc::UnboundedReceiver<Fetched<T>>>,
   fetched_at: Option<Instant>,
   stale_time: Duration,
 }
@@ -110,15 +151,19 @@ impl<T: Send + 'static> Query<T> {
   ///     }
   /// });
   /// ```
-  pub fn new<F, Fut>(fetcher: F) -> Self
+  pub fn new<F, Fut, R>(fetcher: F) -> Self
   where
     F: Fn() -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<T, String>> + Send + 'static,
+    Fut: Future<Output = R> + Send + 'static,
+    R: Into<Fetched<T>>,
   {
     Self {
       state: QueryState::Idle,
       cached_data: None,
-      fetcher: Box::new(move || Box::pin(fetcher())),
+      fetcher: Box::new(move || {
+        let fut = fetcher();
+        Box::pin(async move { fut.await.into() })
+      }),
       receiver: None,
       fetched_at: None,
       stale_time: Duration::from_secs(60), // Default 1 minute
@@ -211,22 +256,31 @@ impl<T: Send + 'static> Query<T> {
 
     // Try to receive without blocking
     match receiver.try_recv() {
-      Ok(Ok(data)) => {
-        self.cached_data = Some(data);
-        self.state = QueryState::Success;
-        self.fetched_at = Some(Instant::now());
-        self.receiver = None;
-        true
-      }
-      Ok(Err(error)) => {
-        self.state = QueryState::Error(error);
-        // Keep cached_data on error - stale data is better than no data
+      Ok(fetched) => {
+        match fetched {
+          Fetched::Fresh(data) => {
+            debug!("Query::poll: received Fresh");
+            self.cached_data = Some(data);
+            self.state = QueryState::Success;
+            self.fetched_at = Some(Instant::now());
+          }
+          Fetched::Stale(data, msg) => {
+            debug!(error = %msg, "Query::poll: received Stale");
+            self.cached_data = Some(data);
+            self.state = QueryState::Error(msg);
+          }
+          Fetched::Error(error) => {
+            debug!(%error, "Query::poll: received Error");
+            self.state = QueryState::Error(error);
+            // Keep cached_data on error - stale data is better than no data
+          }
+        }
         self.receiver = None;
         true
       }
       Err(mpsc::error::TryRecvError::Empty) => false,
       Err(mpsc::error::TryRecvError::Disconnected) => {
-        // Sender dropped without sending - treat as error
+        debug!("Query::poll: channel disconnected");
         self.state = QueryState::Error("Query was cancelled".to_string());
         self.receiver = None;
         true
@@ -243,9 +297,9 @@ impl<T: Send + 'static> Query<T> {
 
     let future = (self.fetcher)();
     tokio::spawn(async move {
-      let result = future.await;
+      let fetched = future.await;
       // Ignore send errors - receiver may have been dropped
-      let _ = tx.send(result);
+      let _ = tx.send(fetched);
     });
   }
 }

@@ -6,6 +6,7 @@ use crate::ui::view::{ShortcutInfo, ShortcutProvider, View, ViewAction};
 use crate::ui::views::{IssueDetailView, IssueEditorView};
 use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
+use tracing::debug;
 
 /// View for displaying a list of issues
 pub struct IssueListView {
@@ -36,11 +37,12 @@ impl IssueListView {
       Query::new(move || {
         let jira = jira_for_query.clone();
         let jql = jql.clone();
-        async move { jira.search_issues(&jql).await.map_err(|e| e.to_string()) }
+        async move { jira.search_issues(&jql).await }
       })
     };
 
     // Start fetching immediately
+    debug!(%project, "IssueListView: created, starting fetch");
     query.fetch();
 
     Self {
@@ -108,7 +110,7 @@ impl View for IssueListView {
     Some(&self.project)
   }
 
-  fn tick(&mut self) {
+  fn tick(&mut self) -> ViewAction {
     let was_loading = self.query.is_loading();
     self.query.poll();
 
@@ -118,6 +120,7 @@ impl View for IssueListView {
         self.panel.update_filter_values(data);
       }
     }
+    ViewAction::None
   }
 
   fn on_resume(&mut self) {

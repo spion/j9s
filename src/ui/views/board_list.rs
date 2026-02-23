@@ -26,12 +26,7 @@ impl BoardListView {
     let mut query = Query::new(move || {
       let jira = jira_for_query.clone();
       let project = project.clone();
-      async move {
-        jira
-          .get_boards(project.as_deref())
-          .await
-          .map_err(|e| e.to_string())
-      }
+      async move { jira.get_boards(project.as_deref()).await }
     });
 
     // Start fetching immediately
@@ -197,7 +192,8 @@ impl View for BoardListView {
     "Boards".to_string()
   }
 
-  fn tick(&mut self) {
+  fn tick(&mut self) -> ViewAction {
     self.query.poll();
+    ViewAction::None
   }
 }

@@ -1,6 +1,6 @@
-use crate::jira::types::{BoardColumn, BoardConfiguration, IssueSummary, StatusInfo};
+use crate::jira::types::{BoardColumn, IssueSummary, StatusInfo};
 use crate::jira::JiraClient;
-use crate::query::{Query, QueryState};
+use crate::query::{Fetched, Query, QueryState};
 use crate::ui::components::{
   FilterBar, FilterBarEvent, FilterFieldPicker, FilterFieldPickerEvent, IssueFilterField,
   KeyResult, SearchEvent, SearchInput, StatusPicker, StatusPickerEvent,
@@ -72,20 +72,18 @@ impl BoardView {
         // Fetch all board data in parallel
         // Filter: unresolved issues + resolved in past 2 weeks
         let jql = "resolution IS EMPTY OR resolved >= -2w";
-        let (issues_result, config_result) = tokio::join!(
+        let (issues, config_result) = tokio::join!(
           jira.get_board_issues(board_id, Some(jql)),
           jira.get_board_configuration(board_id),
         );
 
-        let issues = issues_result.map_err(|e| e.to_string())?;
-        let config = config_result.unwrap_or_else(|_| BoardConfiguration {
-          columns: Vec::new(),
-        });
-
-        Ok(BoardData {
-          issues,
-          columns: config.columns,
-        })
+        match config_result {
+          Ok(config) => issues.map(|issues| BoardData {
+            issues,
+            columns: config.columns,
+          }),
+          Err(e) => Fetched::Error(e.to_string()),
+        }
       }
     });
 
@@ -727,7 +725,7 @@ impl View for BoardView {
     }
   }
 
-  fn tick(&mut self) {
+  fn tick(&mut self) -> ViewAction {
     let was_loading = self.query.is_loading();
     self.query.poll();
 
@@ -743,6 +741,7 @@ impl View for BoardView {
         self.process_status_mutation();
       }
     }
+    ViewAction::None
   }
 
   fn shortcuts(&self) -> Vec<ShortcutInfo> {

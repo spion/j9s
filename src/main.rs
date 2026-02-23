@@ -56,6 +56,8 @@ async fn main() -> Result<()> {
   color_eyre::install()?;
   let _log_guard = init_logging();
 
+  tracing::info!("j9s starting");
+
   let args = Args::parse();
 
   // Load configuration
@@ -70,6 +72,12 @@ async fn main() -> Result<()> {
   } else {
     config
   };
+
+  tracing::info!(
+    project = config.default_project.as_deref().unwrap_or("(none)"),
+    jira_url = %config.jira.url,
+    "config loaded"
+  );
 
   // Initialize and run the app
   let mut app = app::App::new(config).await?;

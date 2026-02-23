@@ -100,15 +100,15 @@ Uses k9s-style navigation:
 - `Enter` pushes detail views
 - `Escape`/`q` pops back
 
-## Data Fetching with Query<T>
+## Data Fetching with Query<T> and Fetched<T>
 
 Views own their data loading via `Query<T>` (inspired by TanStack Query):
 
 ```rust
-// View creates and owns its query
+// View creates and owns its query — closures returning Result<T, String> or Fetched<T> both work
 let mut query = Query::new(move || {
     let jira = jira.clone();
-    async move { jira.search_issues(&jql).await.map_err(|e| e.to_string()) }
+    async move { jira.search_issues(&jql).await }
 });
 query.fetch();  // Start loading immediately
 
@@ -117,14 +117,23 @@ fn tick(&mut self) {
     self.query.poll();
 }
 
-// In render() - use query state
+// In render() - use query.data() unconditionally, query.state() for indicators
 match self.query.state() {
     QueryState::Loading => render_spinner(),
-    QueryState::Success(data) => render_data(data),
+    QueryState::Success => render_data(query.data()),
     QueryState::Error(e) => render_error(e),
     QueryState::Idle => {}
 }
 ```
+
+**Error + cached data coexistence**: `Fetched<T>` expresses three outcomes:
+- `Fresh(data)` — network success → `cached_data = data`, `state = Success`
+- `Stale(data, error)` — cache hit + network error → `cached_data = data`, `state = Error`
+- `Error(msg)` — no data available → `cached_data` unchanged, `state = Error`
+
+Query preserves `cached_data` in all error cases. Views should render `query.data()` unconditionally and use `query.state()` to show error/loading indicators. The cache layer returns `Stale` (not swallows errors) so Query can track and display them.
+
+`From<Result<T, String>>` is implemented for `Fetched<T>`, so closures returning `Result` auto-convert.
 
 **Key points:**
 - Views take `JiraClient` in constructor and create their own queries
@@ -140,22 +149,21 @@ The `src/cache/` module provides transparent caching with offline support:
 ```
 src/cache/
 ├── mod.rs      # Module exports
-├── traits.rs   # Cacheable trait, CacheResult<T>, CacheSource
-├── layer.rs    # CacheLayer<S> - orchestrates caching logic
-└── storage.rs  # CacheStorage trait, SqliteStorage, NoopStorage
+├── traits.rs   # Cacheable trait
+├── layer.rs    # CacheLayer<S> - orchestrates caching logic, returns Fetched<T>
+└── storage.rs  # CacheStorage trait, SqliteStorage
 ```
 
 **Core concepts:**
 
 - **Cacheable trait** - Entities must implement `cache_key()`, `updated_at()`, `entity_type()`
-- **CacheLayer<S>** - Wraps a storage backend, provides fetch methods
-- **CacheStorage trait** - Abstraction for storage backends (SQLite, Noop)
-- **CacheResult<T>** - Contains data + source (Network, CacheFresh, CacheStale, Offline)
+- **CacheLayer<S>** - Wraps a storage backend, always goes to network, returns `Fetched<T>`
+- **CacheStorage trait** - Abstraction for storage backends (SQLite)
 
-**Fetch strategies:**
+**Fetch strategies** — all return `Fetched<T>`:
 
 ```rust
-// Simple list fetch (cache-first, offline fallback)
+// List fetch (network-first, cache fallback)
 cache.fetch_list("boards:PROJECT", || async { jira.get_boards().await }).await
 
 // Incremental fetch (only fetches entities updated since last sync)
@@ -169,10 +177,11 @@ cache.fetch_one("issue:PROJ-123", || async { jira.get_issue(key).await }).await
 
 **Key behaviors:**
 
-- Cache-first: returns fresh cache immediately, avoids network
-- Stale-while-revalidate: returns stale cache while fetching in background
-- Offline mode: on network failure, returns stale cache with `CacheSource::Offline`
+- Network-first: always calls the fetcher, returns `Fresh(data)` on success
+- Offline fallback: on network failure, returns `Stale(cached_data, error)` if cache exists
+- Error propagation: returns `Error(msg)` when both network and cache fail
 - Incremental sync: uses `updated_at > max_cached_updated_at` for efficient updates
+- Storage errors are non-fatal (logged with `tracing::warn!`)
 
 ## Environment
 

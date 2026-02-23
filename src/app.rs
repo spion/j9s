@@ -1,18 +1,19 @@
 use crate::cache::{CacheLayer, SqliteStorage};
 use crate::config::Config;
 use crate::db;
-use crate::event::{Event, EventHandler};
+use crate::event::Event;
 use crate::jira::JiraClient;
 use crate::ui;
 use crate::ui::components::{CommandEvent, CommandInput, KeyResult};
 use crate::ui::view::{ShortcutInfo, View, ViewAction};
 use crate::ui::views::{BoardListView, EpicListView, IssueListView};
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event as CrosstermEvent, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{
   disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::ExecutableCommand;
+use futures::StreamExt;
 use ratatui::prelude::*;
 use std::io::stdout;
 use std::time::Duration;
@@ -33,9 +34,6 @@ pub struct App {
 
   /// Whether to quit
   should_quit: bool,
-
-  /// Whether the terminal needs a full redraw
-  needs_redraw: bool,
 }
 
 impl App {
@@ -57,72 +55,106 @@ impl App {
       config,
       jira,
       should_quit: false,
-      needs_redraw: false,
     })
   }
 
   pub async fn run(&mut self) -> Result<()> {
-    // Setup terminal
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
 
-    // Create event handler
-    let mut events = EventHandler::new(Duration::from_millis(250));
+    let mut events = EventStream::new();
+    let mut tick = tokio::time::interval(Duration::from_millis(250));
 
-    // Main loop
     while !self.should_quit {
-      if self.needs_redraw {
-        terminal.clear()?;
-        self.needs_redraw = false;
-      }
-      // Draw UI
       terminal.draw(|frame| ui::draw(frame, self))?;
 
-      // Handle events
-      if let Some(event) = events.next().await {
-        self.handle_event(event)?;
+      let event = tokio::select! {
+        _ = tick.tick() => Event::Tick,
+        maybe = events.next() => match maybe {
+          Some(Ok(CrosstermEvent::Key(key))) => Event::Key(key),
+          Some(Ok(_)) | Some(Err(_)) => continue,
+          None => break,
+        },
+      };
+
+      if let Some(suspend_fn) = self.handle_event(event) {
+        drop(events);
+        disable_raw_mode()?;
+        stdout().execute(LeaveAlternateScreen)?;
+
+        suspend_fn();
+
+        stdout().execute(EnterAlternateScreen)?;
+        enable_raw_mode()?;
+        events = EventStream::new();
+        tick = tokio::time::interval(Duration::from_millis(250));
+        terminal.clear()?;
+        if let Some(view) = self.view_stack.last_mut() {
+          view.on_resume();
+        }
       }
     }
 
-    // Cleanup terminal
     disable_raw_mode()?;
     stdout().execute(LeaveAlternateScreen)?;
 
     Ok(())
   }
 
-  fn handle_event(&mut self, event: Event) -> Result<()> {
+  fn handle_event(&mut self, event: Event) -> Option<Box<dyn FnOnce()>> {
     match event {
       Event::Key(key) => self.handle_key(key),
-      Event::Tick => self.handle_tick(),
+      Event::Tick => {
+        self.handle_tick();
+        None
+      }
     }
-    Ok(())
   }
 
   fn handle_tick(&mut self) {
-    // Let all views poll their queries
-    for view in &mut self.view_stack {
+    // Tick non-top views (ignore their actions)
+    let last = self.view_stack.len().saturating_sub(1);
+    for view in self.view_stack[..last].iter_mut() {
       view.tick();
+    }
+    // Tick top view and handle its action
+    let action = match self.view_stack.last_mut() {
+      Some(view) => view.tick(),
+      None => ViewAction::None,
+    };
+    match action {
+      ViewAction::Pop => {
+        if self.view_stack.len() > 1 {
+          self.view_stack.pop();
+          if let Some(view) = self.view_stack.last_mut() {
+            view.on_resume();
+          }
+        }
+      }
+      ViewAction::Push(new_view) => {
+        self.view_stack.push(new_view);
+      }
+      _ => {}
     }
   }
 
-  fn handle_key(&mut self, key: KeyEvent) {
+  fn handle_key(&mut self, key: KeyEvent) -> Option<Box<dyn FnOnce()>> {
     // Let command component try to handle first
     match self.command.handle_key(key) {
-      KeyResult::Handled => return,
+      KeyResult::Handled => return None,
       KeyResult::Event(CommandEvent::Submitted(cmd)) => {
         self.execute_command(&cmd);
-        return;
+        return None;
       }
-      KeyResult::Event(CommandEvent::Cancelled) => return,
+      KeyResult::Event(CommandEvent::Cancelled) => return None,
       KeyResult::NotHandled => {}
     }
 
     // Ctrl+C always quits
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
       self.should_quit = true;
-      return;
+      return None;
     }
 
     // Delegate to current view
@@ -139,12 +171,11 @@ impl App {
             }
           }
         }
-        ViewAction::Redraw => {
-          self.needs_redraw = true;
-        }
+        ViewAction::Suspend(f) => return Some(f),
         ViewAction::None => {}
       }
     }
+    None
   }
 
   fn execute_command(&mut self, cmd: &str) {

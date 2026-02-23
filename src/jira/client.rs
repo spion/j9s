@@ -5,9 +5,29 @@ use crate::jira::api_types::{
   ApiProjectIssueType, ApiTransitionsResponse,
 };
 use crate::jira::types::{Board, BoardConfiguration, Issue, IssueSummary, IssueTypeInfo};
+use crate::query::Fetched;
 use color_eyre::{eyre::eyre, Result};
 use serde_json::Value;
+use tracing::debug;
 use url::form_urlencoded;
+
+/// Strip ORDER BY clause from JQL for use in incremental update queries.
+fn strip_order_by(jql: &str) -> &str {
+  let lower = jql.to_ascii_lowercase();
+  match lower.find("order by") {
+    Some(pos) => jql[..pos].trim_end(),
+    None => jql,
+  }
+}
+
+/// Convert a Jira ISO timestamp to JQL date format.
+/// "2026-01-21T22:44:02.902+0000" → "2026-01-21 22:44"
+fn to_jql_date(iso: &str) -> String {
+  iso
+    .get(..16)
+    .unwrap_or(iso)
+    .replace('T', " ")
+}
 
 /// Jira API client with transparent caching support.
 ///
@@ -98,25 +118,24 @@ impl JiraClient {
   }
 
   /// Search for issues using JQL with caching and incremental updates.
-  pub async fn search_issues(&self, jql: &str) -> Result<Vec<IssueSummary>> {
+  pub async fn search_issues(&self, jql: &str) -> Fetched<Vec<IssueSummary>> {
     let cache_key = format!("search:{}", jql.trim().to_lowercase());
-    let base_jql = jql.to_string();
+    let full_jql = jql.to_string();
+    let base_jql = strip_order_by(jql).to_string();
     let client = self.clone();
 
-    let result = self
+    self
       .cache
       .fetch_incremental(&cache_key, move |updated_since| {
         let effective_jql = if let Some(since) = updated_since {
-          format!("({}) AND updated > '{}'", base_jql, since)
+          format!("({}) AND updated >= '{}'", base_jql, to_jql_date(since))
         } else {
-          base_jql.clone()
+          full_jql.clone()
         };
         let client = client.clone();
         async move { client.search_issues_raw(&effective_jql).await }
       })
-      .await?;
-
-    Ok(result.data)
+      .await
   }
 
   /// Raw search without caching
@@ -151,24 +170,23 @@ impl JiraClient {
       .await
       .map_err(|e: serde_json::Error| eyre!("Failed to parse issue: {}", e))?;
 
+    debug!(jql, count = issues.len(), "search_issues_raw: completed");
     Ok(issues)
   }
 
   /// Get a single issue by key with caching.
-  pub async fn get_issue(&self, key: &str) -> Result<Issue> {
+  pub async fn get_issue(&self, key: &str) -> Fetched<Issue> {
     let key_owned = key.to_string();
     let client = self.clone();
 
-    let result = self
+    self
       .cache
       .fetch_one(key, move || {
         let key = key_owned.clone();
         let client = client.clone();
         async move { client.get_issue_raw(&key).await }
       })
-      .await?;
-
-    Ok(result.data)
+      .await
   }
 
   /// Raw get issue without caching
@@ -193,21 +211,19 @@ impl JiraClient {
   }
 
   /// Get all boards with caching, optionally filtered by project.
-  pub async fn get_boards(&self, project: Option<&str>) -> Result<Vec<Board>> {
+  pub async fn get_boards(&self, project: Option<&str>) -> Fetched<Vec<Board>> {
     let cache_key = format!("boards:{}", project.unwrap_or(""));
     let project_owned = project.map(String::from);
     let client = self.clone();
 
-    let result = self
+    self
       .cache
       .fetch_list(&cache_key, move || {
         let project = project_owned.clone();
         let client = client.clone();
         async move { client.get_boards_raw(project.as_deref()).await }
       })
-      .await?;
-
-    Ok(result.data)
+      .await
   }
 
   /// Raw get boards without caching
@@ -243,23 +259,25 @@ impl JiraClient {
     &self,
     board_id: u64,
     jql: Option<&str>,
-  ) -> Result<Vec<IssueSummary>> {
+  ) -> Fetched<Vec<IssueSummary>> {
     let cache_key = format!(
       "board_issues:{}:{}",
       board_id,
       jql.map(|j| j.trim().to_lowercase()).unwrap_or_default()
     );
-    let base_jql = jql.map(String::from);
+    let full_jql = jql.map(String::from);
+    let base_jql = jql.map(|j| strip_order_by(j).to_string());
     let client = self.clone();
 
-    let result = self
+    self
       .cache
       .fetch_incremental(&cache_key, move |updated_since| {
         let effective_jql = match (&base_jql, updated_since) {
-          (Some(base), Some(since)) => Some(format!("({}) AND updated > '{}'", base, since)),
-          (Some(base), None) => Some(base.clone()),
-          (None, Some(since)) => Some(format!("updated > '{}'", since)),
-          (None, None) => None,
+          (Some(base), Some(since)) => {
+            Some(format!("({}) AND updated >= '{}'", base, to_jql_date(since)))
+          }
+          (_, None) => full_jql.clone(),
+          (None, Some(since)) => Some(format!("updated >= '{}'", to_jql_date(since))),
         };
         let client = client.clone();
         async move {
@@ -268,9 +286,7 @@ impl JiraClient {
             .await
         }
       })
-      .await?;
-
-    Ok(result.data)
+      .await
   }
 
   /// Raw get board issues without caching
@@ -336,7 +352,7 @@ impl JiraClient {
   }
 
   /// Get epics for a project
-  pub async fn get_epics(&self, project: &str) -> Result<Vec<IssueSummary>> {
+  pub async fn get_epics(&self, project: &str) -> Fetched<Vec<IssueSummary>> {
     let jql = format!(
       "project = {} AND issuetype = Epic ORDER BY updated DESC",
       project
@@ -345,7 +361,7 @@ impl JiraClient {
   }
 
   /// Get issues that belong to an epic
-  pub async fn get_epic_issues(&self, epic_key: &str) -> Result<Vec<IssueSummary>> {
+  pub async fn get_epic_issues(&self, epic_key: &str) -> Fetched<Vec<IssueSummary>> {
     // Use the Epic Link field if configured, otherwise try "Epic Link"
     let epic_field = self.epic_field.as_deref().unwrap_or("Epic Link");
     let jql = format!("\"{}\" = {} ORDER BY updated DESC", epic_field, epic_key);

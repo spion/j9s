@@ -26,12 +26,7 @@ impl EpicDetailView {
     let mut query = Query::new(move || {
       let jira = jira_for_query.clone();
       let epic_key = epic_key.clone();
-      async move {
-        jira
-          .get_epic_issues(&epic_key)
-          .await
-          .map_err(|e| e.to_string())
-      }
+      async move { jira.get_epic_issues(&epic_key).await }
     });
 
     query.fetch();
@@ -133,7 +128,7 @@ impl View for EpicDetailView {
     self.epic.key.clone()
   }
 
-  fn tick(&mut self) {
+  fn tick(&mut self) -> ViewAction {
     let was_loading = self.query.is_loading();
     self.query.poll();
 
@@ -144,6 +139,7 @@ impl View for EpicDetailView {
         self.panel.update_filter_values(data);
       }
     }
+    ViewAction::None
   }
 
   fn on_resume(&mut self) {

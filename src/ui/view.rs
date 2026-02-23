@@ -55,8 +55,9 @@ pub enum ViewAction {
   Push(Box<dyn View>),
   /// Pop current view from stack (go back)
   Pop,
-  /// Request full terminal redraw (e.g. after launching external process)
-  Redraw,
+  /// Suspend the TUI: drop event handler, leave alternate screen, run closure, restore.
+  /// Used for launching external processes like $EDITOR that need full terminal control.
+  Suspend(Box<dyn FnOnce()>),
 }
 
 /// Trait for view behavior
@@ -82,8 +83,11 @@ pub trait View {
     None
   }
 
-  /// Called on each tick to allow views to poll async queries
-  fn tick(&mut self) {}
+  /// Called on each tick to allow views to poll async queries.
+  /// Return a ViewAction to request navigation (e.g. Pop after async submit completes).
+  fn tick(&mut self) -> ViewAction {
+    ViewAction::None
+  }
 
   /// Called when this view becomes the top view again after a pushed view is popped.
   /// Override to refresh data when returning from a child view.

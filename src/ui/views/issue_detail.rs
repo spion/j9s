@@ -18,7 +18,7 @@ impl IssueDetailView {
     let mut query = Query::new(move || {
       let jira = jira.clone();
       let key = issue_key.clone();
-      async move { jira.get_issue(&key).await.map_err(|e| e.to_string()) }
+      async move { jira.get_issue(&key).await }
     });
 
     // Start fetching immediately
@@ -118,8 +118,9 @@ impl View for IssueDetailView {
     self.key.clone()
   }
 
-  fn tick(&mut self) {
+  fn tick(&mut self) -> ViewAction {
     self.query.poll();
+    ViewAction::None
   }
 
   fn shortcuts(&self) -> Vec<Shortcut> {
