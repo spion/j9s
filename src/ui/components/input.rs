@@ -105,7 +105,12 @@ impl TextInput {
         }
         InputResult::Consumed
       }
-      KeyCode::Char(c) => {
+      KeyCode::Char(c)
+        if key
+          .modifiers
+          .intersection(KeyModifiers::CONTROL | KeyModifiers::ALT)
+          .is_empty() =>
+      {
         self.buffer.insert(self.cursor, c);
         self.cursor += 1;
         InputResult::Consumed

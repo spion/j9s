@@ -1,7 +1,7 @@
 use crate::jira::types::Board;
 use crate::jira::JiraClient;
 use crate::query::{Query, QueryState};
-use crate::ui::components::{KeyResult, SearchEvent, SearchInput};
+use crate::ui::components::{keyword_match, KeyResult, SearchEvent, SearchInput};
 use crate::ui::ensure_valid_selection;
 use crate::ui::view::{View, ViewAction};
 use crate::ui::views::BoardView;
@@ -51,12 +51,11 @@ impl BoardListView {
     let Some(query) = &self.search_filter else {
       return boards.iter().collect();
     };
-    let query_lower = query.to_lowercase();
     boards
       .iter()
       .filter(|board| {
-        board.name.to_lowercase().contains(&query_lower)
-          || board.board_type.to_lowercase().contains(&query_lower)
+        let haystack = format!("{} {}", board.name, board.board_type);
+        keyword_match(&haystack, query)
       })
       .collect()
   }

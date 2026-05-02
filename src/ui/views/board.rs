@@ -2,8 +2,8 @@ use crate::jira::types::{BoardColumn, IssueSummary, StatusInfo};
 use crate::jira::JiraClient;
 use crate::query::{Fetched, Query, QueryState};
 use crate::ui::components::{
-  FilterBar, FilterBarEvent, FilterFieldPicker, FilterFieldPickerEvent, IssueFilterField,
-  KeyResult, SearchEvent, SearchInput, StatusPicker, StatusPickerEvent,
+  keyword_match, FilterBar, FilterBarEvent, FilterFieldPicker, FilterFieldPickerEvent,
+  IssueFilterField, KeyResult, SearchEvent, SearchInput, StatusPicker, StatusPickerEvent,
 };
 use crate::ui::ensure_valid_selection;
 use crate::ui::renderfns::{status_color, truncate};
@@ -197,17 +197,17 @@ impl BoardView {
     let Some(query) = &self.search_filter else {
       return filtered;
     };
-    let query_lower = query.to_lowercase();
     filtered
       .into_iter()
       .filter(|issue| {
-        issue.key.to_lowercase().contains(&query_lower)
-          || issue.summary.to_lowercase().contains(&query_lower)
-          || issue.status.to_lowercase().contains(&query_lower)
-          || issue
-            .assignee
-            .as_ref()
-            .map_or(false, |a| a.to_lowercase().contains(&query_lower))
+        let haystack = format!(
+          "{} {} {} {}",
+          issue.key,
+          issue.summary,
+          issue.status,
+          issue.assignee.as_deref().unwrap_or("")
+        );
+        keyword_match(&haystack, query)
       })
       .collect()
   }

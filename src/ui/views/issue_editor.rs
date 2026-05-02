@@ -179,7 +179,7 @@ impl IssueEditorView {
       title: TextInput::new(),
       issue_type: FieldPicker::new("Issue Type"),
       status: FieldPicker::new("Status"),
-      epic: FieldPicker::new("Epic").with_allow_none(),
+      epic: FieldPicker::new("Epic").with_allow_none().with_search(),
       labels: TextInput::new(),
       description: None,
       metadata_query,
@@ -357,8 +357,9 @@ impl IssueEditorView {
 
     let first_type = meta.issue_types.first().map(|t| t.name.clone());
 
-    let epic_options: Vec<PickerOption> = meta
-      .epics
+    let mut sorted_epics: Vec<&IssueSummary> = meta.epics.iter().collect();
+    sorted_epics.sort_by(|a, b| b.created.cmp(&a.created));
+    let epic_options: Vec<PickerOption> = sorted_epics
       .iter()
       .map(|e| PickerOption {
         id: e.key.clone(),

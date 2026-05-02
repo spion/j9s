@@ -185,6 +185,7 @@ impl ApiIssue {
       priority: f.priority.map(|p| p.name),
       epic,
       updated: f.updated,
+      created: f.created,
     }
   }
 

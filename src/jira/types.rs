@@ -12,6 +12,8 @@ pub struct IssueSummary {
   pub priority: Option<String>,
   pub epic: Option<String>,
   pub updated: String,
+  #[serde(default)]
+  pub created: String,
 }
 
 impl Cacheable for IssueSummary {

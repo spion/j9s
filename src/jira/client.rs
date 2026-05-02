@@ -23,10 +23,7 @@ fn strip_order_by(jql: &str) -> &str {
 /// Convert a Jira ISO timestamp to JQL date format.
 /// "2026-01-21T22:44:02.902+0000" → "2026-01-21 22:44"
 fn to_jql_date(iso: &str) -> String {
-  iso
-    .get(..16)
-    .unwrap_or(iso)
-    .replace('T', " ")
+  iso.get(..16).unwrap_or(iso).replace('T', " ")
 }
 
 /// Jira API client with transparent caching support.
@@ -48,6 +45,7 @@ fn get_issue_fields(epic_field: Option<&str>) -> Vec<&str> {
     "assignee",
     "priority",
     "updated",
+    "created",
   ];
   if let Some(epic_field) = epic_field {
     fields.push(epic_field);
@@ -273,9 +271,11 @@ impl JiraClient {
       .cache
       .fetch_incremental(&cache_key, move |updated_since| {
         let effective_jql = match (&base_jql, updated_since) {
-          (Some(base), Some(since)) => {
-            Some(format!("({}) AND updated >= '{}'", base, to_jql_date(since)))
-          }
+          (Some(base), Some(since)) => Some(format!(
+            "({}) AND updated >= '{}'",
+            base,
+            to_jql_date(since)
+          )),
           (_, None) => full_jql.clone(),
           (None, Some(since)) => Some(format!("updated >= '{}'", to_jql_date(since))),
         };
@@ -354,7 +354,7 @@ impl JiraClient {
   /// Get epics for a project
   pub async fn get_epics(&self, project: &str) -> Fetched<Vec<IssueSummary>> {
     let jql = format!(
-      "project = {} AND issuetype = Epic ORDER BY updated DESC",
+      "project = {} AND issuetype = Epic ORDER BY created DESC",
       project
     );
     self.search_issues(&jql).await

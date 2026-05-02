@@ -2,6 +2,7 @@ use super::filter_bar::{FilterBar, FilterBarEvent};
 use super::filter_field_picker::{FilterFieldPicker, FilterFieldPickerEvent};
 use super::filter_source::FilterSource;
 use super::key_result::KeyResult;
+use super::keyword_match::keyword_match;
 use super::search_input::{SearchEvent, SearchInput};
 use crate::jira::types::{BoardColumn, IssueSummary};
 use crate::ui::ensure_valid_selection;
@@ -128,17 +129,17 @@ impl<F: FilterSource<IssueSummary>> TicketPanel<F> {
     let Some(query) = &self.search_filter else {
       return filtered;
     };
-    let query_lower = query.to_lowercase();
     filtered
       .into_iter()
       .filter(|issue| {
-        issue.key.to_lowercase().contains(&query_lower)
-          || issue.summary.to_lowercase().contains(&query_lower)
-          || issue.status.to_lowercase().contains(&query_lower)
-          || issue
-            .assignee
-            .as_ref()
-            .map_or(false, |a| a.to_lowercase().contains(&query_lower))
+        let haystack = format!(
+          "{} {} {} {}",
+          issue.key,
+          issue.summary,
+          issue.status,
+          issue.assignee.as_deref().unwrap_or("")
+        );
+        keyword_match(&haystack, query)
       })
       .collect()
   }

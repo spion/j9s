@@ -106,6 +106,7 @@ mod tests {
         priority: Some("High".to_string()),
         epic: Some("Epic-1".to_string()),
         updated: "2024-01-01".to_string(),
+        created: "2024-01-01".to_string(),
       },
       IssueSummary {
         key: "TEST-2".to_string(),
@@ -117,6 +118,7 @@ mod tests {
         priority: Some("Low".to_string()),
         epic: None,
         updated: "2024-01-02".to_string(),
+        created: "2024-01-02".to_string(),
       },
       IssueSummary {
         key: "TEST-3".to_string(),
@@ -128,6 +130,7 @@ mod tests {
         priority: None,
         epic: Some("Epic-1".to_string()),
         updated: "2024-01-03".to_string(),
+        created: "2024-01-03".to_string(),
       },
     ]
   }
