@@ -42,6 +42,7 @@ impl App {
     let cache_storage = SqliteStorage::new(conn)?;
     let cache = CacheLayer::new(cache_storage);
     let jira = JiraClient::new(&config, cache)?;
+    jira.set_assignee_presets(config.assignees.clone()).await;
 
     let default_project = config.default_project.clone().unwrap_or_default();
 
@@ -50,6 +51,7 @@ impl App {
         default_project,
         jira.clone(),
         config.default_labels.clone(),
+        config.assignees.clone(),
       ))],
       command: CommandInput::new(),
       config,
@@ -183,10 +185,12 @@ impl App {
       "issues" => {
         let project = self.config.default_project.clone().unwrap_or_default();
         let labels = self.config.default_labels.clone();
+        let assignees = self.config.assignees.clone();
         self.view_stack = vec![Box::new(IssueListView::new(
           project,
           self.jira.clone(),
           labels,
+          assignees,
         ))];
       }
       "boards" => {
@@ -201,10 +205,12 @@ impl App {
       "epics" => {
         let project = self.config.default_project.clone().unwrap_or_default();
         let labels = self.config.default_labels.clone();
+        let assignees = self.config.assignees.clone();
         self.view_stack = vec![Box::new(EpicListView::new(
           project,
           self.jira.clone(),
           labels,
+          assignees,
         ))];
       }
       "searches" => {

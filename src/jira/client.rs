@@ -8,7 +8,10 @@ use crate::jira::types::{Board, BoardConfiguration, Issue, IssueSummary, IssueTy
 use crate::query::Fetched;
 use color_eyre::{eyre::eyre, Result};
 use serde_json::Value;
-use tracing::debug;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::{debug, warn};
 use url::form_urlencoded;
 
 /// Strip ORDER BY clause from JQL for use in incremental update queries.
@@ -35,6 +38,10 @@ pub struct JiraClient {
   client: gouqi::r#async::Jira,
   epic_field: Option<String>,
   cache: CacheLayer<SqliteStorage>,
+  auth_type: AuthType,
+  assignee_presets: Arc<Mutex<Vec<String>>>,
+  /// None until first Cloud resolution attempt; Some(map) afterwards.
+  assignee_id_cache: Arc<Mutex<Option<HashMap<String, String>>>>,
 }
 
 fn get_issue_fields(epic_field: Option<&str>) -> Vec<&str> {
@@ -112,7 +119,71 @@ impl JiraClient {
       client,
       epic_field: config.jira.epic_field.clone(),
       cache,
+      auth_type,
+      assignee_presets: Arc::new(Mutex::new(Vec::new())),
+      assignee_id_cache: Arc::new(Mutex::new(None)),
     })
+  }
+
+  /// Provide the preset list of assignee display names. On Cloud these are
+  /// resolved to accountIds lazily on first `resolve_assignee` call.
+  pub async fn set_assignee_presets(&self, names: Vec<String>) {
+    *self.assignee_presets.lock().await = names;
+  }
+
+  /// Resolve a display name to the value that should be sent in the Jira API
+  /// "assignee" field. Cloud: looks up accountId via /user/search (cached for
+  /// the session). Server/on-prem: returns the name as-is. Returns None when
+  /// Cloud lookup finds no match.
+  pub async fn resolve_assignee(&self, name: &str) -> Option<String> {
+    if name.is_empty() {
+      return None;
+    }
+    match self.auth_type {
+      AuthType::Cloud => {
+        let mut cache_guard = self.assignee_id_cache.lock().await;
+        if cache_guard.is_none() {
+          let presets = self.assignee_presets.lock().await.clone();
+          let mut map = HashMap::new();
+          for preset in &presets {
+            match self.search_user_account_id(preset).await {
+              Ok(Some(id)) => {
+                map.insert(preset.clone(), id);
+              }
+              Ok(None) => {
+                warn!(name = %preset, "no Cloud user matched assignee preset");
+              }
+              Err(e) => {
+                warn!(name = %preset, error = %e, "failed to resolve assignee preset");
+              }
+            }
+          }
+          *cache_guard = Some(map);
+        }
+        cache_guard.as_ref().and_then(|m| m.get(name).cloned())
+      }
+      _ => Some(name.to_string()),
+    }
+  }
+
+  /// Cloud-only: query /user/search and return the first match's accountId.
+  async fn search_user_account_id(&self, name: &str) -> Result<Option<String>> {
+    let encoded: String = form_urlencoded::byte_serialize(name.as_bytes()).collect();
+    let endpoint = format!("/user/search?query={}", encoded);
+    let response: Value = self
+      .client
+      .get("api", &endpoint)
+      .await
+      .map_err(|e| eyre!("user search for {}: {}", name, e))?;
+
+    Ok(
+      response
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|user| user.get("accountId"))
+        .and_then(|v| v.as_str())
+        .map(String::from),
+    )
   }
 
   /// Search for issues using JQL with caching and incremental updates.
@@ -382,6 +453,9 @@ impl JiraClient {
 
   /// Create a new issue. Returns the created issue key.
   /// Uses plain text description (API v2) for Cloud + Server compatibility.
+  ///
+  /// `assignee` is a display name from the user's config preset list. An empty
+  /// string or None leaves the issue unassigned (Jira default).
   pub async fn create_issue(
     &self,
     project: &str,
@@ -390,6 +464,7 @@ impl JiraClient {
     description: Option<&str>,
     labels: &[String],
     epic: Option<&str>,
+    assignee: Option<&str>,
   ) -> Result<String> {
     let mut fields = serde_json::json!({
       "project": { "key": project },
@@ -406,6 +481,16 @@ impl JiraClient {
       fields[epic_field] = serde_json::Value::String(epic_key.to_string());
     }
 
+    if let Some(name) = assignee.filter(|s| !s.is_empty()) {
+      if let Some(value) = self.resolve_assignee(name).await {
+        let key = match self.auth_type {
+          AuthType::Cloud => "accountId",
+          _ => "name",
+        };
+        fields["assignee"] = serde_json::json!({ key: value });
+      }
+    }
+
     let body = serde_json::json!({ "fields": fields });
     let response: serde_json::Value = self
       .client
@@ -420,6 +505,11 @@ impl JiraClient {
   }
 
   /// Update an existing issue's fields.
+  ///
+  /// `assignee` semantics:
+  ///   - `None`              → field omitted from PATCH (don't touch).
+  ///   - `Some("")`          → send `null` (explicit unassign).
+  ///   - `Some(display_name)` → resolve + send.
   pub async fn update_issue(
     &self,
     key: &str,
@@ -428,6 +518,7 @@ impl JiraClient {
     issue_type: &str,
     labels: &[String],
     epic: Option<&str>,
+    assignee: Option<&str>,
   ) -> Result<()> {
     let mut fields = serde_json::json!({
       "summary": summary,
@@ -445,6 +536,20 @@ impl JiraClient {
         Some(epic_key) => serde_json::Value::String(epic_key.to_string()),
         None => serde_json::Value::Null,
       };
+    }
+
+    match assignee {
+      None => {}
+      Some("") => fields["assignee"] = serde_json::Value::Null,
+      Some(name) => {
+        if let Some(value) = self.resolve_assignee(name).await {
+          let field_key = match self.auth_type {
+            AuthType::Cloud => "accountId",
+            _ => "name",
+          };
+          fields["assignee"] = serde_json::json!({ field_key: value });
+        }
+      }
     }
 
     let body = serde_json::json!({ "fields": fields });

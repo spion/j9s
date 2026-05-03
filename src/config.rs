@@ -13,6 +13,10 @@ pub struct Config {
   pub boards: BoardsConfig,
   #[serde(default)]
   pub default_labels: Vec<String>,
+  /// Preset list of assignee display names shown in the issue editor.
+  /// Cloud resolves names to accountIds via user-search; on-premise sends as-is.
+  #[serde(default)]
+  pub assignees: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -12,12 +12,18 @@ pub struct EpicListView {
   jira: JiraClient,
   project: String,
   default_labels: Vec<String>,
+  assignee_presets: Vec<String>,
   query: Query<Vec<IssueSummary>>,
   panel: TicketPanel<IssueFilterField>,
 }
 
 impl EpicListView {
-  pub fn new(project: String, jira: JiraClient, default_labels: Vec<String>) -> Self {
+  pub fn new(
+    project: String,
+    jira: JiraClient,
+    default_labels: Vec<String>,
+    assignee_presets: Vec<String>,
+  ) -> Self {
     let mut query = if project.is_empty() {
       // No project configured
       Query::new(|| async { Ok(Vec::new()) })
@@ -37,6 +43,7 @@ impl EpicListView {
       jira,
       project,
       default_labels,
+      assignee_presets,
       query,
       panel: TicketPanel::list_only(),
     }
@@ -53,9 +60,14 @@ impl View for EpicListView {
 
     match self.panel.handle_key(key, items) {
       KeyResult::Handled => ViewAction::None,
-      KeyResult::Event(TicketPanelEvent::Selected(epic)) => ViewAction::Push(Box::new(
-        EpicDetailView::new(epic, self.jira.clone(), self.default_labels.clone()),
-      )),
+      KeyResult::Event(TicketPanelEvent::Selected(epic)) => {
+        ViewAction::Push(Box::new(EpicDetailView::new(
+          epic,
+          self.jira.clone(),
+          self.default_labels.clone(),
+          self.assignee_presets.clone(),
+        )))
+      }
       KeyResult::Event(TicketPanelEvent::RefreshRequested) => {
         self.query.refetch();
         ViewAction::None
@@ -67,11 +79,12 @@ impl View for EpicListView {
           self.project.clone(),
           None,
           self.default_labels.clone(),
+          self.assignee_presets.clone(),
           self.jira.clone(),
         )))
       }
       KeyResult::Event(TicketPanelEvent::EditRequested(issue)) => ViewAction::Push(Box::new(
-        IssueEditorView::new_edit(issue, self.jira.clone()),
+        IssueEditorView::new_edit(issue, self.assignee_presets.clone(), self.jira.clone()),
       )),
       KeyResult::NotHandled => ViewAction::None,
     }

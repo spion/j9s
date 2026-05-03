@@ -14,12 +14,18 @@ pub struct EpicDetailView {
   jira: JiraClient,
   epic: IssueSummary,
   default_labels: Vec<String>,
+  assignee_presets: Vec<String>,
   query: Query<Vec<IssueSummary>>,
   panel: TicketPanel<IssueFilterField>,
 }
 
 impl EpicDetailView {
-  pub fn new(epic: IssueSummary, jira: JiraClient, default_labels: Vec<String>) -> Self {
+  pub fn new(
+    epic: IssueSummary,
+    jira: JiraClient,
+    default_labels: Vec<String>,
+    assignee_presets: Vec<String>,
+  ) -> Self {
     let epic_key = epic.key.clone();
     let jira_for_query = jira.clone();
 
@@ -35,6 +41,7 @@ impl EpicDetailView {
       jira,
       epic,
       default_labels,
+      assignee_presets,
       query,
       panel: TicketPanel::new(Vec::new()), // Will set columns when data loads
     }
@@ -85,11 +92,12 @@ impl View for EpicDetailView {
           project,
           Some(self.epic.key.clone()),
           self.default_labels.clone(),
+          self.assignee_presets.clone(),
           self.jira.clone(),
         )))
       }
       KeyResult::Event(TicketPanelEvent::EditRequested(issue)) => ViewAction::Push(Box::new(
-        IssueEditorView::new_edit(issue, self.jira.clone()),
+        IssueEditorView::new_edit(issue, self.assignee_presets.clone(), self.jira.clone()),
       )),
       KeyResult::NotHandled => ViewAction::None,
     }

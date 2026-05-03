@@ -13,12 +13,18 @@ pub struct IssueListView {
   jira: JiraClient,
   project: String,
   default_labels: Vec<String>,
+  assignee_presets: Vec<String>,
   query: Query<Vec<IssueSummary>>,
   panel: TicketPanel<IssueFilterField>,
 }
 
 impl IssueListView {
-  pub fn new(project: String, jira: JiraClient, default_labels: Vec<String>) -> Self {
+  pub fn new(
+    project: String,
+    jira: JiraClient,
+    default_labels: Vec<String>,
+    assignee_presets: Vec<String>,
+  ) -> Self {
     let jql = if project.is_empty() {
       String::new()
     } else {
@@ -49,6 +55,7 @@ impl IssueListView {
       jira,
       project,
       default_labels,
+      assignee_presets,
       query,
       panel: TicketPanel::list_only(),
     }
@@ -80,11 +87,12 @@ impl View for IssueListView {
           self.project.clone(),
           None,
           self.default_labels.clone(),
+          self.assignee_presets.clone(),
           self.jira.clone(),
         )))
       }
       KeyResult::Event(TicketPanelEvent::EditRequested(issue)) => ViewAction::Push(Box::new(
-        IssueEditorView::new_edit(issue, self.jira.clone()),
+        IssueEditorView::new_edit(issue, self.assignee_presets.clone(), self.jira.clone()),
       )),
       KeyResult::NotHandled => ViewAction::None,
     }

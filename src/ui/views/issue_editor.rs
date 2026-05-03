@@ -9,7 +9,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Paragraph};
 
-const FIELD_COUNT: usize = 6;
+const FIELD_COUNT: usize = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
@@ -17,8 +17,9 @@ enum Field {
   Type = 1,
   Status = 2,
   Epic = 3,
-  Labels = 4,
-  Description = 5,
+  Assignee = 4,
+  Labels = 5,
+  Description = 6,
 }
 
 impl Field {
@@ -28,8 +29,9 @@ impl Field {
       1 => Field::Type,
       2 => Field::Status,
       3 => Field::Epic,
-      4 => Field::Labels,
-      5 => Field::Description,
+      4 => Field::Assignee,
+      5 => Field::Labels,
+      6 => Field::Description,
       _ => Field::Title,
     }
   }
@@ -64,6 +66,12 @@ pub struct IssueEditorView {
   issue_type: FieldPicker,
   status: FieldPicker,
   epic: FieldPicker,
+  assignee: FieldPicker,
+  assignee_dirty: bool,
+  /// Display name of the issue's existing assignee when it's not in the
+  /// preset list — used to render `(current: <name>)` as a hint while the
+  /// picker stays empty / unchanged.
+  original_assignee: Option<String>,
   labels: TextInput,
   description: Option<String>,
 
@@ -87,6 +95,7 @@ impl IssueEditorView {
     project: String,
     epic: Option<String>,
     default_labels: Vec<String>,
+    assignee_presets: Vec<String>,
     jira: JiraClient,
   ) -> Self {
     let jira_meta = jira.clone();
@@ -109,6 +118,7 @@ impl IssueEditorView {
 
     let mut view = Self::base(jira, metadata_query);
     view.mode = EditorMode::Create { project };
+    view.set_assignee_options(&assignee_presets);
 
     if !default_labels.is_empty() {
       view.labels.set_value(&default_labels.join(", "));
@@ -120,7 +130,7 @@ impl IssueEditorView {
     view
   }
 
-  pub fn new_edit(issue: IssueSummary, jira: JiraClient) -> Self {
+  pub fn new_edit(issue: IssueSummary, assignee_presets: Vec<String>, jira: JiraClient) -> Self {
     let project = issue.key.split('-').next().unwrap_or("").to_string();
 
     let jira_meta = jira.clone();
@@ -164,8 +174,28 @@ impl IssueEditorView {
       view.epic.set_value(epic, epic);
     }
 
+    view.set_assignee_options(&assignee_presets);
+    if let Some(name) = &issue.assignee {
+      if assignee_presets.iter().any(|p| p == name) {
+        view.assignee.set_value(name, name);
+      } else {
+        view.original_assignee = Some(name.clone());
+      }
+    }
+
     view.issue_query = Some(issue_query);
     view
+  }
+
+  fn set_assignee_options(&mut self, presets: &[String]) {
+    let opts = presets
+      .iter()
+      .map(|n| PickerOption {
+        id: n.clone(),
+        label: n.clone(),
+      })
+      .collect();
+    self.assignee.set_options(opts);
   }
 
   fn base(jira: JiraClient, mut metadata_query: Query<ProjectMetadata>) -> Self {
@@ -180,6 +210,9 @@ impl IssueEditorView {
       issue_type: FieldPicker::new("Issue Type"),
       status: FieldPicker::new("Status"),
       epic: FieldPicker::new("Epic").with_allow_none().with_search(),
+      assignee: FieldPicker::new("Assignee").with_allow_none().with_search(),
+      assignee_dirty: false,
+      original_assignee: None,
       labels: TextInput::new(),
       description: None,
       metadata_query,
@@ -225,6 +258,16 @@ impl IssueEditorView {
     match self.epic.handle_key(key) {
       KeyResult::Handled => return Some(ViewAction::None),
       KeyResult::Event(_) => return Some(ViewAction::None),
+      KeyResult::NotHandled => {}
+    }
+
+    match self.assignee.handle_key(key) {
+      KeyResult::Handled => return Some(ViewAction::None),
+      KeyResult::Event(FieldPickerEvent::Selected { .. }) => {
+        self.assignee_dirty = true;
+        return Some(ViewAction::None);
+      }
+      KeyResult::Event(FieldPickerEvent::Cancelled) => return Some(ViewAction::None),
       KeyResult::NotHandled => {}
     }
 
@@ -306,6 +349,10 @@ impl IssueEditorView {
       }
       Field::Epic => {
         self.epic.show();
+        Some(ViewAction::None)
+      }
+      Field::Assignee => {
+        self.assignee.show();
         Some(ViewAction::None)
       }
       Field::Description => Some(self.prepare_editor()),
@@ -461,6 +508,14 @@ impl IssueEditorView {
       Some(self.epic.current_id().to_string())
     };
     let target_status_id = self.status.current_id().to_string();
+    // None → don't touch (edit) / unassigned (create).
+    // Some("") → explicit unassign.
+    // Some(name) → set to this preset.
+    let assignee: Option<String> = if self.assignee_dirty {
+      Some(self.assignee.current_id().to_string())
+    } else {
+      None
+    };
 
     match &self.mode {
       EditorMode::Create { project, .. } => {
@@ -473,6 +528,7 @@ impl IssueEditorView {
           let description = description.clone();
           let labels = labels.clone();
           let epic = epic.clone();
+          let assignee = assignee.clone();
           let target_status_id = target_status_id.clone();
           async move {
             let key = jira
@@ -483,6 +539,7 @@ impl IssueEditorView {
                 description.as_deref(),
                 &labels,
                 epic.as_deref(),
+                assignee.as_deref(),
               )
               .await
               .map_err(|e| e.to_string())?;
@@ -512,6 +569,7 @@ impl IssueEditorView {
           let description = description.clone();
           let labels = labels.clone();
           let epic = epic.clone();
+          let assignee = assignee.clone();
           let target_status_id = target_status_id.clone();
           let original_status_id = original_status_id.clone();
           async move {
@@ -523,6 +581,7 @@ impl IssueEditorView {
                 &issue_type,
                 &labels,
                 epic.as_deref(),
+                assignee.as_deref(),
               )
               .await
               .map_err(|e| e.to_string())?;
@@ -573,6 +632,7 @@ impl IssueEditorView {
       ("Type:", self.render_picker_value(&self.issue_type)),
       ("Status:", self.render_picker_value(&self.status)),
       ("Epic:", self.render_picker_value(&self.epic)),
+      ("Assignee:", self.render_assignee_value()),
       ("Labels:", self.render_labels_value()),
     ];
 
@@ -684,6 +744,23 @@ impl IssueEditorView {
     }
   }
 
+  fn render_assignee_value(&self) -> Line<'_> {
+    let label = self.assignee.current_label();
+    if !label.is_empty() {
+      Line::from(vec![label.cyan(), " \u{25be}".dark_gray()])
+    } else if !self.assignee_dirty {
+      if let Some(name) = &self.original_assignee {
+        return Line::from(vec![
+          format!("(current: {}) ", name).dark_gray(),
+          "\u{25be}".dark_gray(),
+        ]);
+      }
+      Line::from("(none) \u{25be}".dark_gray())
+    } else {
+      Line::from("(none) \u{25be}".dark_gray())
+    }
+  }
+
   fn render_labels_value(&self) -> Line<'_> {
     if self.focused_field() == Field::Labels {
       let val = self.labels.value();
@@ -774,6 +851,7 @@ impl View for IssueEditorView {
     self.issue_type.render_overlay(frame, area);
     self.status.render_overlay(frame, area);
     self.epic.render_overlay(frame, area);
+    self.assignee.render_overlay(frame, area);
   }
 
   fn on_resume(&mut self) {

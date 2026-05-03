@@ -28,6 +28,13 @@ default_project: "PROJ"
 #     - "Done"
 #     - "Backlog"
 
+# Preset list of assignee display names shown in the issue editor.
+# On Jira Cloud the names are resolved to accountIds once per session via the
+# user-search API; on On-premise they are sent as-is.
+# assignees:
+#   - "Alice Example"
+#   - "Bob Example"
+
 # Authentication
 # ==============
 # Set ONE of these environment variables:
