@@ -7,7 +7,7 @@ use crate::ui::components::{
 use crate::ui::view::{ShortcutInfo, View, ViewAction};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
 const FIELD_COUNT: usize = 7;
 
@@ -688,21 +688,16 @@ impl IssueEditorView {
       );
     }
 
-    // Status line
+    // Status line — transient progress hints only; errors render as an overlay.
     let status_y = inner.y + inner.height.saturating_sub(2);
     let status_area = Rect::new(inner.x + 1, status_y, inner.width - 2, 1);
 
-    if let Some(err) = &self.error_message {
-      frame.render_widget(
-        Paragraph::new(Span::styled(err.as_str(), Style::new().red())),
-        status_area,
-      );
-    } else if self.submitting {
+    if self.submitting {
       frame.render_widget(
         Paragraph::new(Span::styled("Submitting...", Style::new().yellow())),
         status_area,
       );
-    } else if !self.metadata_loaded {
+    } else if !self.metadata_loaded && self.error_message.is_none() {
       frame.render_widget(
         Paragraph::new(Span::styled("Loading...", Style::new().dark_gray())),
         status_area,
@@ -808,6 +803,42 @@ impl IssueEditorView {
       Rect::new(inner.x + label_width + 1, y, value_width, 1),
     );
   }
+
+  /// Bottom-anchored, multi-line error overlay. Sized to fit the wrapped
+  /// message, capped to roughly half the form height, and stacked above the
+  /// help line.
+  fn render_error_overlay(&self, frame: &mut Frame, area: Rect) {
+    let Some(msg) = self.error_message.as_deref() else {
+      return;
+    };
+    if area.width < 14 || area.height < 6 {
+      return;
+    }
+
+    let max_width = area.width.saturating_sub(4).min(120);
+    let inner_width = max_width.saturating_sub(2).max(1) as usize;
+
+    let estimated_lines: usize = msg
+      .split('\n')
+      .map(|line| line.chars().count() / inner_width + 1)
+      .sum();
+
+    let max_height = (area.height / 2).max(5).min(area.height.saturating_sub(3));
+    let height = (estimated_lines as u16 + 2).clamp(3, max_height);
+
+    let x = area.x + (area.width.saturating_sub(max_width)) / 2;
+    // Sit just above the help line: last overlay row = help_y - 1.
+    let y = (area.y + area.height).saturating_sub(height + 2);
+    let overlay = Rect::new(x, y, max_width, height);
+
+    frame.render_widget(Clear, overlay);
+    let block = Block::bordered().border_style(Color::Red).title(" Error ");
+    let para = Paragraph::new(msg)
+      .block(block)
+      .fg(Color::Red)
+      .wrap(Wrap { trim: false });
+    frame.render_widget(para, overlay);
+  }
 }
 
 impl View for IssueEditorView {
@@ -852,6 +883,7 @@ impl View for IssueEditorView {
     self.status.render_overlay(frame, area);
     self.epic.render_overlay(frame, area);
     self.assignee.render_overlay(frame, area);
+    self.render_error_overlay(frame, area);
   }
 
   fn on_resume(&mut self) {
