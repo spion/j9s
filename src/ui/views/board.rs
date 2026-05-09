@@ -1,17 +1,14 @@
-use crate::jira::types::{BoardColumn, IssueSummary, StatusInfo};
+use crate::jira::types::{BoardColumn, IssueSummary};
 use crate::jira::JiraClient;
 use crate::query::{Fetched, Query, QueryState};
 use crate::ui::components::{
-  keyword_match, FilterBar, FilterBarEvent, FilterFieldPicker, FilterFieldPickerEvent,
-  IssueFilterField, KeyResult, SearchEvent, SearchInput, StatusPicker, StatusPickerEvent,
+  IssueFilterField, KeyResult, StatusPicker, StatusPickerEvent, TicketPanel, TicketPanelEvent,
 };
-use crate::ui::ensure_valid_selection;
-use crate::ui::renderfns::{status_color, truncate};
-use crate::ui::view::{ShortcutInfo, View, ViewAction};
-use crate::ui::views::IssueDetailView;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::view::{ShortcutInfo, ShortcutProvider, View, ViewAction};
+use crate::ui::views::{IssueDetailView, IssueEditorView};
+use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use std::collections::BTreeSet;
 use tracing::info;
 
@@ -28,32 +25,24 @@ pub struct BoardView {
   board_id: u64,
   board_name: String,
 
-  // Jira client for API calls
   jira: JiraClient,
+
+  // Editor context (for create/edit)
+  project: String,
+  default_labels: Vec<String>,
+  assignee_presets: Vec<String>,
 
   // Config: column names to hide (lowercase for case-insensitive matching)
   hide_columns: BTreeSet<String>,
 
-  // Data query
+  // Data + UI
   query: Query<BoardData>,
+  panel: TicketPanel<IssueFilterField>,
+  columns_set: bool,
 
-  // UI state
-  list_state: ListState,  // Selection for list mode
-  column_selected: usize, // Selection within column for column mode
-  selected_column: usize,
-  column_mode: bool,
-
-  // Filter state (client-side filtering by field values)
-  filter_bar: FilterBar<IssueFilterField, IssueSummary>,
-  filter_picker: FilterFieldPicker<IssueFilterField, IssueSummary>, // Picker for selecting filter field
-
-  // Components
-  search: SearchInput,
-  search_filter: Option<String>,
+  // Status mutation flow (Shift+h/l → optional StatusPicker → API call)
   status_picker: StatusPicker,
-
-  // Status update state
-  pending_issue_key: Option<String>, // Issue key waiting for status picker selection
+  pending_issue_key: Option<String>,
   status_mutation: Option<Query<()>>,
   error_message: Option<String>,
 }
@@ -62,6 +51,9 @@ impl BoardView {
   pub fn new(
     board_id: u64,
     board_name: String,
+    project: String,
+    default_labels: Vec<String>,
+    assignee_presets: Vec<String>,
     jira: JiraClient,
     hide_columns: BTreeSet<String>,
   ) -> Self {
@@ -69,7 +61,6 @@ impl BoardView {
     let mut query = Query::new(move || {
       let jira = jira_for_query.clone();
       async move {
-        // Fetch all board data in parallel
         // Filter: unresolved issues + resolved in past 2 weeks
         let jql = "resolution IS EMPTY OR resolved >= -2w";
         let (issues, config_result) = tokio::join!(
@@ -87,23 +78,19 @@ impl BoardView {
       }
     });
 
-    // Start fetching immediately
     query.fetch();
 
     Self {
       board_id,
       board_name,
       jira,
+      project,
+      default_labels,
+      assignee_presets,
       hide_columns,
       query,
-      list_state: ListState::default(),
-      column_selected: 0,
-      selected_column: 0,
-      column_mode: false,
-      filter_bar: FilterBar::new(),
-      filter_picker: FilterFieldPicker::new(),
-      search: SearchInput::new(),
-      search_filter: None,
+      panel: TicketPanel::new(Vec::new()),
+      columns_set: false,
       status_picker: StatusPicker::new(),
       pending_issue_key: None,
       status_mutation: None,
@@ -111,348 +98,53 @@ impl BoardView {
     }
   }
 
-  fn data(&self) -> Option<&BoardData> {
-    self.query.data()
-  }
-
-  fn issues(&self) -> &[IssueSummary] {
-    self.data().map(|d| d.issues.as_slice()).unwrap_or(&[])
-  }
-
-  fn columns(&self) -> Vec<&BoardColumn> {
+  fn visible_columns(&self) -> Vec<BoardColumn> {
     self
+      .query
       .data()
       .map(|d| {
         d.columns
           .iter()
           .filter(|col| !self.hide_columns.contains(&col.name.to_lowercase()))
+          .cloned()
           .collect()
       })
       .unwrap_or_default()
   }
 
-  fn is_loading(&self) -> bool {
-    self.query.is_loading()
-  }
-
-  /// Extract the value of a filter field from an issue
-  fn get_field_value(field: IssueFilterField, issue: &IssueSummary) -> Option<String> {
-    match field {
-      IssueFilterField::None => None,
-      IssueFilterField::Assignee => issue.assignee.clone(),
-      IssueFilterField::Epic => issue.epic.clone(),
-      IssueFilterField::Status => Some(issue.status.clone()),
-      IssueFilterField::Priority => issue.priority.clone(),
+  fn title(&self) -> String {
+    match self.query.state() {
+      QueryState::Loading => format!("{} (loading...)", self.board_name),
+      QueryState::Error(e) => format!("{} (error: {})", self.board_name, e),
+      _ => self.board_name.clone(),
     }
   }
 
-  /// Extract unique values for a filter field from all issues
-  fn extract_filter_values(&self, field: IssueFilterField) -> Vec<Option<String>> {
-    if matches!(field, IssueFilterField::None) {
-      return Vec::new();
-    }
-
-    let mut values: BTreeSet<Option<String>> = BTreeSet::new();
-    for issue in self.issues() {
-      values.insert(Self::get_field_value(field, issue));
-    }
-
-    // Convert to Vec, with None (unassigned) first if present
-    let mut result: Vec<Option<String>> = Vec::new();
-    if values.contains(&None) {
-      result.push(None);
-    }
-    for v in values.into_iter().flatten() {
-      result.push(Some(v));
-    }
-    result
-  }
-
-  /// Update filter bar values when data loads
-  fn update_filter_values(&mut self) {
-    let values = self.extract_filter_values(self.filter_bar.field());
-    self.filter_bar.update_values(values);
-  }
-
-  /// Get issues filtered by active filter and search
-  fn filtered_issues(&self) -> Vec<&IssueSummary> {
-    let issues = self.issues();
-    let field = self.filter_bar.field();
-
-    // First apply field filter
-    let filtered: Vec<&IssueSummary> = if let Some(filter_value) = self.filter_bar.selected_value()
-    {
-      issues
-        .iter()
-        .filter(|issue| {
-          let issue_value = Self::get_field_value(field, issue);
-          issue_value == *filter_value
-        })
-        .collect()
-    } else {
-      issues.iter().collect()
-    };
-
-    // Then apply search filter
-    let Some(query) = &self.search_filter else {
-      return filtered;
-    };
-    filtered
-      .into_iter()
-      .filter(|issue| {
-        let haystack = format!(
-          "{} {} {} {}",
-          issue.key,
-          issue.summary,
-          issue.status,
-          issue.assignee.as_deref().unwrap_or("")
-        );
-        keyword_match(&haystack, query)
-      })
-      .collect()
-  }
-
-  /// Get issues for a specific column (by status)
-  fn issues_for_column(&self, column: &BoardColumn) -> Vec<&IssueSummary> {
-    self
-      .filtered_issues()
-      .into_iter()
-      .filter(|issue| column.statuses.iter().any(|s| s.id == issue.status_id))
-      .collect()
-  }
-
-  /// Render list mode
-  fn render_list(&mut self, frame: &mut Frame, area: Rect) {
-    let len = self.filtered_issues().len();
-    ensure_valid_selection(&mut self.list_state, len);
-
-    let search_indicator = self
-      .search_filter
-      .as_ref()
-      .map(|q| format!(" [/{}]", q))
-      .unwrap_or_default();
-
-    let title = match self.query.state() {
-      QueryState::Loading => format!(" {} (loading...) ", self.board_name),
-      QueryState::Error(e) => format!(" {} (error: {}) ", self.board_name, e),
-      _ => format!(" {} ({} issues){} ", self.board_name, len, search_indicator),
-    };
-
-    let block = Block::bordered()
-      .title(Line::from(title).centered())
-      .border_style(Color::Blue);
-
-    if self.issues().is_empty() && !self.is_loading() {
-      let content = if self.query.is_error() {
-        "Failed to load board. Press 'r' to retry."
-      } else {
-        "No issues found on this board."
-      };
-      let paragraph = Paragraph::new(content).block(block).fg(Color::DarkGray);
-      frame.render_widget(paragraph, area);
-      return;
-    }
-
-    // Collect items to avoid borrow conflict
-    let items: Vec<ListItem> = self
-      .filtered_issues()
-      .iter()
-      .map(|issue| {
-        let color = status_color(&issue.status);
-
-        let line = Line::from(vec![
-          format!("{:<15}", issue.key).cyan(),
-          Span::raw(" "),
-          Span::styled(format!("{:<15}", truncate(&issue.status, 15)), color),
-          Span::raw(" "),
-          Span::raw(issue.summary.clone()),
-        ]);
-        ListItem::new(line)
-      })
-      .collect();
-
-    let list = List::new(items)
-      .block(block)
-      .highlight_style(Style::new().on_dark_gray().bold())
-      .highlight_symbol("> ");
-
-    frame.render_stateful_widget(list, area, &mut self.list_state);
-  }
-
-  /// Render column (kanban) mode
-  fn render_columns(&self, frame: &mut Frame, area: Rect) {
-    let columns = self.columns();
-    if columns.is_empty() {
-      let block = Block::bordered()
-        .title(Line::from(format!(" {} ", self.board_name)).centered())
-        .border_style(Color::Blue);
-
-      let content = if self.is_loading() {
-        "Loading..."
-      } else {
-        "No columns configured for this board."
-      };
-      let paragraph = Paragraph::new(content).block(block).fg(Color::DarkGray);
-      frame.render_widget(paragraph, area);
-      return;
-    }
-
-    // Use Layout to distribute columns evenly
-    let constraints: Vec<Constraint> = columns
-      .iter()
-      .map(|_| Constraint::Ratio(1, columns.len() as u32))
-      .collect();
-    let col_areas = Layout::horizontal(constraints).split(area);
-
-    // Render each column
-    for (col_idx, column) in columns.iter().enumerate() {
-      let issues = self.issues_for_column(column);
-      let is_selected_column = col_idx == self.selected_column;
-      let col_area = col_areas[col_idx];
-
-      let border_color = if is_selected_column {
-        Color::Yellow
-      } else {
-        Color::Blue
-      };
-
-      let title = format!(" {} ({}) ", truncate(&column.name, 15), issues.len());
-      let block = Block::bordered()
-        .title(Line::from(title).centered())
-        .border_style(border_color);
-
-      let items: Vec<ListItem> = issues
-        .iter()
-        .map(|issue| {
-          let issue_id = Line::from(issue.key.as_str().cyan());
-          let issue_title = Line::from(truncate(
-            &issue.summary,
-            col_area.width.saturating_sub(4) as usize,
-          ));
-          ListItem::new(vec![issue_id, issue_title])
-        })
-        .collect();
-
-      let list = List::new(items)
-        .block(block)
-        .highlight_style(Style::new().on_dark_gray().bold())
-        .highlight_symbol("> ");
-
-      if is_selected_column {
-        let mut state = ListState::default();
-        state.select(Some(self.column_selected));
-        frame.render_stateful_widget(list, col_area, &mut state);
-      } else {
-        frame.render_widget(list, col_area);
-      }
-    }
-  }
-
-  /// Get the currently selected issue
-  fn selected_issue(&self) -> Option<&IssueSummary> {
-    if self.column_mode {
-      if let Some(column) = self.columns().get(self.selected_column) {
-        let issues = self.issues_for_column(column);
-        issues.get(self.column_selected).copied()
-      } else {
-        None
-      }
-    } else {
-      self
-        .list_state
-        .selected()
-        .and_then(|idx| self.filtered_issues().get(idx).copied())
-    }
-  }
-
-  /// Navigate in list mode (uses ListState)
-  fn navigate_list(&mut self, direction: i32) {
-    if direction > 0 {
-      self.list_state.select_next();
-    } else {
-      self.list_state.select_previous();
-    }
-  }
-
-  /// Navigate in column mode
-  fn navigate_column(&mut self, direction: i32, horizontal: bool) {
-    if horizontal {
-      // Move between columns
-      let num_columns = self.columns().len();
-      if num_columns == 0 {
-        return;
-      }
-
-      if direction > 0 {
-        self.selected_column = (self.selected_column + 1).min(num_columns - 1);
-      } else {
-        self.selected_column = self.selected_column.checked_sub(1).unwrap_or(0);
-      }
-      // Reset selection within new column
-      self.column_selected = 0;
-    } else {
-      // Move within column
-      if let Some(column) = self.columns().get(self.selected_column) {
-        let len = self.issues_for_column(column).len();
-        if len == 0 {
-          return;
-        }
-
-        if direction > 0 {
-          self.column_selected = (self.column_selected + 1).min(len - 1);
-        } else {
-          self.column_selected = self.column_selected.checked_sub(1).unwrap_or(0);
-        }
-      }
-    }
-  }
-
-  /// Initiate a status change to the target column
-  fn initiate_status_change(&mut self, target_col_idx: usize) {
-    // Clear any previous error
+  /// Begin a status transition: directly mutate if single-status, otherwise show picker.
+  fn begin_transition(
+    &mut self,
+    issue_key: String,
+    target_statuses: Vec<crate::jira::types::StatusInfo>,
+  ) {
     self.error_message = None;
-
-    info!(
-      "Initiating status change to column index {}",
-      target_col_idx
-    );
-    let issue = match self.selected_issue() {
-      Some(issue) => issue.clone(),
-      None => {
-        self.error_message = Some("No issue selected".to_string());
-        return;
-      }
-    };
-
-    // Get target column's statuses
-    let target_statuses: Vec<StatusInfo> = self
-      .columns()
-      .get(target_col_idx)
-      .map(|col| col.statuses.clone())
-      .unwrap_or_default();
-
     if target_statuses.is_empty() {
       self.error_message = Some("Target column has no statuses".to_string());
       return;
     }
-
     if target_statuses.len() == 1 {
-      // Single status - update directly
       info!(
         "Updating issue {} to status {}",
-        issue.key, target_statuses[0].name
+        issue_key, target_statuses[0].name
       );
-      self.update_issue_status(&issue.key, &target_statuses[0].id);
+      self.update_issue_status(&issue_key, &target_statuses[0].id);
     } else {
-      // Multiple statuses - show picker
-      self.pending_issue_key = Some(issue.key.clone());
+      self.pending_issue_key = Some(issue_key);
       self
         .status_picker
         .show("Select Status".to_string(), target_statuses);
     }
   }
 
-  /// Update an issue's status directly
   fn update_issue_status(&mut self, issue_key: &str, status_id: &str) {
     let jira = self.jira.clone();
     let key = issue_key.to_string();
@@ -472,256 +164,132 @@ impl BoardView {
     self.status_mutation = Some(query);
   }
 
-  /// Process the result of a status update mutation
   fn process_status_mutation(&mut self) {
-    let query = match &self.status_mutation {
-      Some(q) => q,
-      None => return,
+    let Some(query) = &self.status_mutation else {
+      return;
     };
-
     if query.is_loading() {
       return;
     }
-
     if let Some(err) = query.error() {
       self.error_message = Some(format!("Status update failed: {}", err));
     } else {
-      // Success - refetch board data
       self.query.refetch();
     }
-
     self.status_mutation = None;
   }
 
-  /// Render error message if present
   fn render_error(&self, frame: &mut Frame, area: Rect) {
-    if let Some(msg) = &self.error_message {
-      // Calculate dimensions - wider popup for detailed errors
-      let max_width = (area.width * 80 / 100).min(70).max(40);
-      let inner_width = max_width.saturating_sub(2) as usize;
+    let Some(msg) = &self.error_message else {
+      return;
+    };
 
-      // Estimate height needed (rough approximation for wrapped text)
-      let line_count = msg.lines().count();
-      let char_count = msg.len();
-      let estimated_lines = (char_count / inner_width).max(line_count) + 1;
-      let height = (estimated_lines as u16 + 2).min(area.height - 4).max(5);
+    let max_width = (area.width * 80 / 100).min(70).max(40);
+    let inner_width = max_width.saturating_sub(2) as usize;
+    let line_count = msg.lines().count();
+    let estimated_lines = (msg.len() / inner_width).max(line_count) + 1;
+    let height = (estimated_lines as u16 + 2).min(area.height - 4).max(5);
 
-      let x = area.x + (area.width.saturating_sub(max_width)) / 2;
-      let y = area.y + (area.height.saturating_sub(height)) / 2;
-      let error_area = Rect::new(x, y, max_width, height);
-      frame.render_widget(Clear, error_area);
+    let x = area.x + (area.width.saturating_sub(max_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let error_area = Rect::new(x, y, max_width, height);
+    frame.render_widget(Clear, error_area);
 
-      let block = Block::bordered()
-        .border_style(Color::Red)
-        .title(" Error - press any key to dismiss ");
+    let block = Block::bordered()
+      .border_style(Color::Red)
+      .title(" Error - press any key to dismiss ");
 
-      let paragraph = Paragraph::new(msg.as_str())
-        .block(block)
-        .fg(Color::Red)
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(msg.as_str())
+      .block(block)
+      .fg(Color::Red)
+      .wrap(Wrap { trim: false });
 
-      frame.render_widget(paragraph, error_area);
-    }
-  }
-
-  // Key handling helpers for or_else chain pattern
-  fn handle_overlays(&mut self, key: KeyEvent) -> Option<ViewAction> {
-    // Filter field picker
-    match self.filter_picker.handle_key(key) {
-      KeyResult::Handled => return Some(ViewAction::None),
-      KeyResult::Event(FilterFieldPickerEvent::Selected(field)) => {
-        let values = self.extract_filter_values(field);
-        self.filter_bar.set_field_and_values(field, values);
-        return Some(ViewAction::None);
-      }
-      KeyResult::Event(FilterFieldPickerEvent::Cancelled) => return Some(ViewAction::None),
-      KeyResult::NotHandled => {}
-    }
-
-    // Filter bar (tab navigation)
-    match self.filter_bar.handle_key(key) {
-      KeyResult::Handled => return Some(ViewAction::None),
-      KeyResult::Event(FilterBarEvent::SelectionChanged) => {
-        // Reset list selection when changing filter
-        self.list_state.select(Some(0));
-        self.column_selected = 0;
-        return Some(ViewAction::None);
-      }
-      KeyResult::NotHandled => {}
-    }
-
-    // Status picker
-    match self.status_picker.handle_key(key) {
-      KeyResult::Handled => return Some(ViewAction::None),
-      KeyResult::Event(StatusPickerEvent::Selected(status_id)) => {
-        if let Some(issue_key) = self.pending_issue_key.take() {
-          self.update_issue_status(&issue_key, &status_id);
-        }
-        return Some(ViewAction::None);
-      }
-      KeyResult::Event(StatusPickerEvent::Cancelled) => {
-        self.pending_issue_key = None;
-        return Some(ViewAction::None);
-      }
-      KeyResult::NotHandled => {}
-    }
-
-    // Search
-    match self.search.handle_key(key) {
-      KeyResult::Handled => return Some(ViewAction::None),
-      KeyResult::Event(SearchEvent::Changed(query)) => {
-        self.search_filter = if query.is_empty() { None } else { Some(query) };
-        self.list_state.select(Some(0));
-        self.column_selected = 0;
-        return Some(ViewAction::None);
-      }
-      KeyResult::Event(SearchEvent::Submitted) => return Some(ViewAction::None),
-      KeyResult::NotHandled => {}
-    }
-
-    None
-  }
-
-  fn handle_navigation(&mut self, key: KeyEvent) -> Option<ViewAction> {
-    // Mode-specific navigation
-    if self.column_mode {
-      match key.code {
-        KeyCode::Char('h') | KeyCode::Left => {
-          if key.modifiers.contains(KeyModifiers::SHIFT) {
-            // Shift+Left: Transition to previous column
-            if self.selected_column > 0 {
-              self.initiate_status_change(self.selected_column - 1);
-            }
-          } else {
-            self.navigate_column(-1, true);
-          }
-          Some(ViewAction::None)
-        }
-        KeyCode::Char('l') | KeyCode::Right => {
-          if key.modifiers.contains(KeyModifiers::SHIFT) {
-            // Shift+Right: Transition to next column
-            let num_columns = self.columns().len();
-            if self.selected_column + 1 < num_columns {
-              self.initiate_status_change(self.selected_column + 1);
-            }
-          } else {
-            self.navigate_column(1, true);
-          }
-          Some(ViewAction::None)
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-          self.navigate_column(1, false);
-          Some(ViewAction::None)
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-          self.navigate_column(-1, false);
-          Some(ViewAction::None)
-        }
-        _ => None,
-      }
-    } else {
-      // List mode navigation
-      match key.code {
-        KeyCode::Char('j') | KeyCode::Down => {
-          self.navigate_list(1);
-          Some(ViewAction::None)
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-          self.navigate_list(-1);
-          Some(ViewAction::None)
-        }
-        _ => None,
-      }
-    }
-  }
-
-  fn handle_toggles(&mut self, key: KeyEvent) -> Option<ViewAction> {
-    match key.code {
-      KeyCode::Char('f') => {
-        self.filter_picker.show();
-        Some(ViewAction::None)
-      }
-      KeyCode::Char('s') => {
-        self.column_mode = !self.column_mode;
-        self.list_state.select(Some(0));
-        self.column_selected = 0;
-        self.selected_column = 0;
-        Some(ViewAction::None)
-      }
-      _ => None,
-    }
-  }
-
-  fn handle_actions(&mut self, key: KeyEvent) -> Option<ViewAction> {
-    match key.code {
-      KeyCode::Char('r') => {
-        self.query.refetch();
-        Some(ViewAction::None)
-      }
-      KeyCode::Enter => self.selected_issue().map(|issue| {
-        ViewAction::Push(Box::new(IssueDetailView::new(
-          issue.key.clone(),
-          self.jira.clone(),
-        )))
-      }),
-      KeyCode::Char('q') | KeyCode::Esc => Some(ViewAction::Pop),
-      _ => None,
-    }
+    frame.render_widget(paragraph, error_area);
   }
 }
 
 impl View for BoardView {
   fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
-    // Clear error message on any key press
     self.error_message = None;
 
-    self
-      .handle_overlays(key)
-      .or_else(|| self.handle_navigation(key))
-      .or_else(|| self.handle_toggles(key))
-      .or_else(|| self.handle_actions(key))
-      .unwrap_or(ViewAction::None)
+    // Status picker overlay takes priority over panel keys
+    match self.status_picker.handle_key(key) {
+      KeyResult::Handled => return ViewAction::None,
+      KeyResult::Event(StatusPickerEvent::Selected(status_id)) => {
+        if let Some(issue_key) = self.pending_issue_key.take() {
+          self.update_issue_status(&issue_key, &status_id);
+        }
+        return ViewAction::None;
+      }
+      KeyResult::Event(StatusPickerEvent::Cancelled) => {
+        self.pending_issue_key = None;
+        return ViewAction::None;
+      }
+      KeyResult::NotHandled => {}
+    }
+
+    let items = self
+      .query
+      .data()
+      .map(|d| d.issues.as_slice())
+      .unwrap_or(&[]);
+    match self.panel.handle_key(key, items) {
+      KeyResult::Handled => ViewAction::None,
+      KeyResult::Event(TicketPanelEvent::Selected(issue)) => {
+        ViewAction::Push(Box::new(IssueDetailView::new(issue.key, self.jira.clone())))
+      }
+      KeyResult::Event(TicketPanelEvent::RefreshRequested) => {
+        self.query.refetch();
+        ViewAction::None
+      }
+      KeyResult::Event(TicketPanelEvent::Back) => ViewAction::Pop,
+      KeyResult::Event(TicketPanelEvent::FilterChanged) => ViewAction::None,
+      KeyResult::Event(TicketPanelEvent::CreateRequested) => {
+        ViewAction::Push(Box::new(IssueEditorView::new_create(
+          self.project.clone(),
+          None,
+          self.default_labels.clone(),
+          self.assignee_presets.clone(),
+          self.jira.clone(),
+        )))
+      }
+      KeyResult::Event(TicketPanelEvent::EditRequested(issue)) => ViewAction::Push(Box::new(
+        IssueEditorView::new_edit(issue, self.assignee_presets.clone(), self.jira.clone()),
+      )),
+      KeyResult::Event(TicketPanelEvent::StatusTransitionRequested {
+        issue,
+        target_statuses,
+      }) => {
+        self.begin_transition(issue.key, target_statuses);
+        ViewAction::None
+      }
+      KeyResult::NotHandled => ViewAction::None,
+    }
   }
 
   fn render(&mut self, frame: &mut Frame, area: Rect) {
-    // Split area for filters (if active) and main content
-    let (filter_area, content_area) = if self.filter_bar.is_active() {
-      let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
-      (Some(chunks[0]), chunks[1])
-    } else {
-      (None, area)
-    };
+    let title = self.title();
+    let is_loading = self.query.is_loading();
+    let items = self
+      .query
+      .data()
+      .map(|d| d.issues.as_slice())
+      .unwrap_or(&[]);
 
-    // Render filter bar when active
-    if let Some(filter_area) = filter_area {
-      self.filter_bar.render(frame, filter_area);
-    }
-
-    // Render main content
-    if self.column_mode {
-      self.render_columns(frame, content_area);
-    } else {
-      self.render_list(frame, content_area);
-    }
-
-    // Let search component render its overlay
-    self.search.render_overlay(frame, area);
-
-    // Render filter field picker if active
-    self.filter_picker.render_overlay(frame, area);
-
-    // Render status picker if active
+    self.panel.render(frame, area, items, &title, is_loading);
     self.status_picker.render_overlay(frame, area);
-
-    // Render error message if present
     self.render_error(frame, area);
   }
 
   fn breadcrumb_label(&self) -> String {
-    if self.column_mode {
-      format!("{} [Columns]", self.board_name)
+    self.board_name.clone()
+  }
+
+  fn project(&self) -> Option<&str> {
+    if self.project.is_empty() {
+      None
     } else {
-      self.board_name.clone()
+      Some(&self.project)
     }
   }
 
@@ -729,18 +297,23 @@ impl View for BoardView {
     let was_loading = self.query.is_loading();
     self.query.poll();
 
-    // Update filter values when data finishes loading
-    if was_loading && !self.query.is_loading() && self.query.data().is_some() {
-      self.update_filter_values();
+    if was_loading && !self.query.is_loading() {
+      if let Some(data) = self.query.data() {
+        let items = data.issues.clone();
+        self.panel.update_filter_values(&items);
+        if !self.columns_set {
+          self.panel.set_columns(self.visible_columns());
+          self.columns_set = true;
+        }
+      }
     }
 
-    // Poll status mutation if in progress
     if let Some(ref mut query) = self.status_mutation {
       if query.poll() {
-        // Mutation completed, process the result
         self.process_status_mutation();
       }
     }
+
     ViewAction::None
   }
 
@@ -749,23 +322,8 @@ impl View for BoardView {
       ShortcutInfo::new(":", "command").with_priority(10),
       ShortcutInfo::new("/", "search").with_priority(20),
       ShortcutInfo::new("q", "back").with_priority(30),
-      ShortcutInfo::new("r", "refresh").with_priority(100),
-      ShortcutInfo::new("f", "filter").with_priority(101),
     ];
-
-    // Filter tab navigation shortcuts
-    if self.filter_bar.is_active() {
-      shortcuts.push(ShortcutInfo::new("PgUp/Dn", "filter tab").with_priority(102));
-    }
-
-    // Column mode shortcuts
-    if !self.columns().is_empty() {
-      shortcuts.push(ShortcutInfo::new("s", "columns").with_priority(110));
-      if self.column_mode {
-        shortcuts.push(ShortcutInfo::new("S-h/l", "transition").with_priority(111));
-      }
-    }
-
+    shortcuts.extend(self.panel.shortcuts());
     shortcuts
   }
 }

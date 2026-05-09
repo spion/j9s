@@ -13,6 +13,9 @@ use std::collections::BTreeSet;
 /// View for displaying a list of boards
 pub struct BoardListView {
   jira: JiraClient,
+  project: String,
+  default_labels: Vec<String>,
+  assignee_presets: Vec<String>,
   hide_columns: BTreeSet<String>,
   query: Query<Vec<Board>>,
   list_state: ListState,
@@ -21,11 +24,18 @@ pub struct BoardListView {
 }
 
 impl BoardListView {
-  pub fn new(project: Option<String>, jira: JiraClient, hide_columns: BTreeSet<String>) -> Self {
+  pub fn new(
+    project: Option<String>,
+    jira: JiraClient,
+    default_labels: Vec<String>,
+    assignee_presets: Vec<String>,
+    hide_columns: BTreeSet<String>,
+  ) -> Self {
     let jira_for_query = jira.clone();
+    let project_for_query = project.clone();
     let mut query = Query::new(move || {
       let jira = jira_for_query.clone();
-      let project = project.clone();
+      let project = project_for_query.clone();
       async move { jira.get_boards(project.as_deref()).await }
     });
 
@@ -34,6 +44,9 @@ impl BoardListView {
 
     Self {
       jira,
+      project: project.unwrap_or_default(),
+      default_labels,
+      assignee_presets,
       hide_columns,
       query,
       list_state: ListState::default(),
@@ -159,6 +172,9 @@ impl BoardListView {
             return Some(ViewAction::Push(Box::new(BoardView::new(
               board.id,
               board.name.clone(),
+              self.project.clone(),
+              self.default_labels.clone(),
+              self.assignee_presets.clone(),
               self.jira.clone(),
               self.hide_columns.clone(),
             ))));

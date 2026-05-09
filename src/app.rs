@@ -195,10 +195,14 @@ impl App {
       }
       "boards" => {
         let project = self.config.default_project.clone();
+        let labels = self.config.default_labels.clone();
+        let assignees = self.config.assignees.clone();
         let hide_columns = self.config.boards.hide_columns.clone();
         self.view_stack = vec![Box::new(BoardListView::new(
           project,
           self.jira.clone(),
+          labels,
+          assignees,
           hide_columns,
         ))];
       }

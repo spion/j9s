@@ -99,6 +99,7 @@ impl View for EpicDetailView {
       KeyResult::Event(TicketPanelEvent::EditRequested(issue)) => ViewAction::Push(Box::new(
         IssueEditorView::new_edit(issue, self.assignee_presets.clone(), self.jira.clone()),
       )),
+      KeyResult::Event(TicketPanelEvent::StatusTransitionRequested { .. }) => ViewAction::None,
       KeyResult::NotHandled => ViewAction::None,
     }
   }

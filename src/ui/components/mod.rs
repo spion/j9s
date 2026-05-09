@@ -13,8 +13,6 @@ mod ticket_panel;
 
 pub use command_input::{CommandEvent, CommandInput};
 pub use field_picker::{FieldPicker, FieldPickerEvent, PickerOption};
-pub use filter_bar::{FilterBar, FilterBarEvent};
-pub use filter_field_picker::{FilterFieldPicker, FilterFieldPickerEvent};
 pub use input::{InputResult, TextInput};
 pub use issue_filters::IssueFilterField;
 pub use key_result::KeyResult;

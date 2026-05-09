@@ -4,11 +4,11 @@ use super::filter_source::FilterSource;
 use super::key_result::KeyResult;
 use super::keyword_match::keyword_match;
 use super::search_input::{SearchEvent, SearchInput};
-use crate::jira::types::{BoardColumn, IssueSummary};
+use crate::jira::types::{BoardColumn, IssueSummary, StatusInfo};
 use crate::ui::ensure_valid_selection;
 use crate::ui::renderfns::{status_color, truncate};
 use crate::ui::view::{ShortcutInfo, ShortcutProvider};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 
@@ -27,6 +27,11 @@ pub enum TicketPanelEvent {
   CreateRequested,
   /// User wants to edit the selected issue ('e' key)
   EditRequested(IssueSummary),
+  /// User wants to transition the selected issue to an adjacent column (Shift+h/l in column mode)
+  StatusTransitionRequested {
+    issue: IssueSummary,
+    target_statuses: Vec<StatusInfo>,
+  },
 }
 
 /// Reusable ticket panel component combining:
@@ -246,6 +251,18 @@ impl<F: FilterSource<IssueSummary>> TicketPanel<F> {
     items: &[IssueSummary],
   ) -> Option<KeyResult<TicketPanelEvent>> {
     if self.column_mode {
+      // Shift+h/l (or Shift+Left/Right): transition selected issue to neighbour column
+      if key.modifiers.contains(KeyModifiers::SHIFT) {
+        let dir = match key.code {
+          KeyCode::Char('H') | KeyCode::Char('h') | KeyCode::Left => Some(-1i32),
+          KeyCode::Char('L') | KeyCode::Char('l') | KeyCode::Right => Some(1i32),
+          _ => None,
+        };
+        if let Some(d) = dir {
+          return Some(self.transition_event(d, items));
+        }
+      }
+
       match key.code {
         KeyCode::Char('h') | KeyCode::Left => {
           self.navigate_column(-1, items);
@@ -315,6 +332,41 @@ impl<F: FilterSource<IssueSummary>> TicketPanel<F> {
       KeyCode::Char('q') | KeyCode::Esc => Some(KeyResult::Event(TicketPanelEvent::Back)),
       _ => None,
     }
+  }
+
+  /// Build a status-transition event for the selected issue, moving by `direction` columns.
+  /// Returns `Handled` (no event) if there's no selection, no neighbour, or the neighbour has no statuses.
+  fn transition_event(
+    &self,
+    direction: i32,
+    items: &[IssueSummary],
+  ) -> KeyResult<TicketPanelEvent> {
+    let num_columns = self.columns.len();
+    if num_columns == 0 {
+      return KeyResult::Handled;
+    }
+    let target_idx = match direction {
+      d if d > 0 => self
+        .column_selected
+        .checked_add(1)
+        .filter(|i| *i < num_columns),
+      d if d < 0 => self.column_selected.checked_sub(1),
+      _ => None,
+    };
+    let Some(idx) = target_idx else {
+      return KeyResult::Handled;
+    };
+    let target_statuses = self.columns[idx].statuses.clone();
+    if target_statuses.is_empty() {
+      return KeyResult::Handled;
+    }
+    let Some(issue) = self.selected(items).cloned() else {
+      return KeyResult::Handled;
+    };
+    KeyResult::Event(TicketPanelEvent::StatusTransitionRequested {
+      issue,
+      target_statuses,
+    })
   }
 
   fn navigate_column(&mut self, direction: i32, items: &[IssueSummary]) {
@@ -536,6 +588,9 @@ impl<F: FilterSource<IssueSummary>> ShortcutProvider for TicketPanel<F> {
     // Column mode shortcuts
     if self.has_columns() {
       shortcuts.push(ShortcutInfo::new("s", "columns").with_priority(110));
+      if self.column_mode {
+        shortcuts.push(ShortcutInfo::new("S-h/l", "transition").with_priority(111));
+      }
     }
 
     shortcuts
