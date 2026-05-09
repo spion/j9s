@@ -6,7 +6,11 @@ use crate::jira::api_types::{
 };
 use crate::jira::types::{Board, BoardConfiguration, Issue, IssueSummary, IssueTypeInfo};
 use crate::query::Fetched;
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{
+  eyre::{eyre, WrapErr},
+  Result,
+};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,6 +33,22 @@ fn to_jql_date(iso: &str) -> String {
   iso.get(..16).unwrap_or(iso).replace('T', " ")
 }
 
+/// Compact, UTF-8-safe preview of a response body for inclusion in error
+/// messages. Whitespace is collapsed so HTML pages stay on one line.
+fn body_snippet(body: &str) -> String {
+  const MAX: usize = 200;
+  let collapsed: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+  if collapsed.is_empty() {
+    return "<empty>".to_string();
+  }
+  if collapsed.chars().count() <= MAX {
+    collapsed
+  } else {
+    let truncated: String = collapsed.chars().take(MAX).collect();
+    format!("{truncated}…")
+  }
+}
+
 /// Jira API client with transparent caching support.
 ///
 /// This client provides the Jira API and automatically caches results
@@ -36,6 +56,9 @@ fn to_jql_date(iso: &str) -> String {
 #[derive(Clone)]
 pub struct JiraClient {
   client: gouqi::r#async::Jira,
+  http: reqwest::Client,
+  base_url: String,
+  credentials: gouqi::Credentials,
   epic_field: Option<String>,
   cache: CacheLayer<SqliteStorage>,
   auth_type: AuthType,
@@ -112,11 +135,15 @@ impl JiraClient {
       .build()
       .map_err(|e| eyre!("Failed to create HTTP client: {}", e))?;
 
-    let client = gouqi::r#async::Jira::from_client(&config.jira.url, credentials, http_client)
-      .map_err(|e| eyre!("Failed to create Jira client: {}", e))?;
+    let client =
+      gouqi::r#async::Jira::from_client(&config.jira.url, credentials.clone(), http_client.clone())
+        .map_err(|e| eyre!("Failed to create Jira client: {}", e))?;
 
     Ok(Self {
       client,
+      http: http_client,
+      base_url: config.jira.url.clone(),
+      credentials,
       epic_field: config.jira.epic_field.clone(),
       cache,
       auth_type,
@@ -164,6 +191,51 @@ impl JiraClient {
       }
       _ => Some(name.to_string()),
     }
+  }
+
+  /// Authenticated GET that mirrors gouqi's URL scheme but reads the response
+  /// body as text first, so parse / non-2xx errors include a snippet of the
+  /// body. Use this when a `serde_json` "expected value" error would otherwise
+  /// hide whether the server returned HTML, an empty body, etc.
+  async fn json_get<T: DeserializeOwned>(&self, api: &str, endpoint: &str) -> Result<T> {
+    let url = format!(
+      "{}/rest/{}/latest{}",
+      self.base_url.trim_end_matches('/'),
+      api,
+      endpoint
+    );
+    let req = self.http.get(&url).header("Accept", "application/json");
+    let req = match &self.credentials {
+      gouqi::Credentials::Bearer(t) => req.bearer_auth(t),
+      gouqi::Credentials::Basic(u, p) => req.basic_auth(u, Some(p)),
+      gouqi::Credentials::Cookie(c) => req.header(reqwest::header::COOKIE, c),
+      gouqi::Credentials::Anonymous => req,
+    };
+    let resp = req
+      .send()
+      .await
+      .wrap_err_with(|| format!("HTTP request to {url} failed"))?;
+    let status = resp.status();
+    let body = resp
+      .text()
+      .await
+      .wrap_err_with(|| format!("reading response body from {url} (HTTP {status})"))?;
+    if !status.is_success() {
+      return Err(eyre!(
+        "HTTP {} from {}: {}",
+        status,
+        url,
+        body_snippet(&body)
+      ));
+    }
+    serde_json::from_str::<T>(&body).wrap_err_with(|| {
+      format!(
+        "parsing JSON from {} (HTTP {}) — body: {}",
+        url,
+        status,
+        body_snippet(&body)
+      )
+    })
   }
 
   /// Cloud-only: query /user/search and return the first match's accountId.
@@ -444,8 +516,7 @@ impl JiraClient {
   pub async fn get_project_statuses(&self, project: &str) -> Result<Vec<IssueTypeInfo>> {
     let endpoint = format!("/project/{}/statuses", project);
     let response: Vec<ApiProjectIssueType> = self
-      .client
-      .get("api", &endpoint)
+      .json_get("api", &endpoint)
       .await
       .map_err(|e| eyre!("Failed to get project statuses: {}", e))?;
     Ok(response.into_iter().map(|t| t.into_domain()).collect())
